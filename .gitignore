@@ -55,3 +55,6 @@ id_ed25519
 # TEST CACHE
 .pytest_cache/
 .coverage
+
+# sensitive files
+service-account.json
