@@ -59,3 +59,47 @@ def get_subcounties(db: Session):
         {"id": row.id, "name": row.name, "geometry": row.geojson}
         for row in result
     ]
+
+def get_wards_by_county(db: Session, county_id: str):
+
+    query = """
+    SELECT
+        id,
+        name,
+        ST_AsGeoJSON(geometry) as geojson
+    FROM admin_ward
+    WHERE county_id = :county_id
+    """
+
+    result = db.execute(text(query), {"county_id": county_id})
+
+    return [
+        {"id": row.id, "name": row.name, "geometry": row.geojson}
+        for row in result
+    ]
+
+def get_subcounties_by_county(db: Session, county_id: str):
+    query = """
+    SELECT id, name, ST_AsGeoJSON(geometry) as geojson
+    FROM admin_subcounty
+    WHERE county_id = :county_id
+    """
+    result = db.execute(text(query), {"county_id": county_id})
+
+    return [
+        {"id": row.id, "name": row.name, "geometry": row.geojson}
+        for row in result
+    ]
+
+def get_wards_by_subcounty(db: Session, subcounty_id: str):
+    query = """
+    SELECT id, name, ST_AsGeoJSON(geometry) as geojson
+    FROM admin_ward
+    WHERE subcounty_id = :subcounty_id
+    """
+    result = db.execute(text(query), {"subcounty_id": subcounty_id})
+
+    return [
+        {"id": row.id, "name": row.name, "geometry": row.geojson}
+        for row in result
+    ]
