@@ -1,10 +1,15 @@
-
 import ee
-SERVICE_ACCOUNT = "greenmap-kenya@greenmap-kenya-483110.iam.gserviceaccount.com"
-KEY_PATH = "service-account.json"
+import os
+import json
+
 def initialize_ee():
-    credentials = ee.ServiceAccountCredentials(
-        SERVICE_ACCOUNT,
-        KEY_PATH
+    service_account_info = json.loads(
+        os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"]
     )
+
+    credentials = ee.ServiceAccountCredentials(
+        service_account_info["client_email"],
+        key_data=json.dumps(service_account_info)
+    )
+
     ee.Initialize(credentials)
