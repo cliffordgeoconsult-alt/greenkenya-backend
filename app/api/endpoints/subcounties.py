@@ -1,26 +1,26 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from app.db.session import get_db
-from app.services.admin_service import get_wards
+from app.services.admin_service import get_subcounties
 
 router = APIRouter()
 
 import json
 
 @router.get("/")
-def get_wards_endpoint(db: Session = Depends(get_db)):
-    wards = get_wards(db)
+def get_subcounties_endpoint(db: Session = Depends(get_db)):
+    subs = get_subcounties(db)
 
     features = []
 
-    for w in wards:
+    for s in subs:
         features.append({
             "type": "Feature",
             "properties": {
-                "id": w["id"],
-                "name": w["name"]
+                "id": s["id"],
+                "name": s["name"]
             },
-            "geometry": json.loads(w["geometry"])
+            "geometry": json.loads(s["geometry"])
         })
 
     return {

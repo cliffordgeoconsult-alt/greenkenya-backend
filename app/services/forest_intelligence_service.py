@@ -25,7 +25,7 @@ def run_vegetation_analysis(db):
 
     initialize_ee()
 
-    counties = get_counties(db)[:1]  # test first 10
+    counties = get_counties(db)
 
     results = []
 
