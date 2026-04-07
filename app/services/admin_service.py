@@ -9,21 +9,29 @@ def get_counties(db: Session):
         id,
         name,
         ST_AsGeoJSON(geometry) as geojson
-    FROM admin_county
+    FROM counties
     """
 
     result = db.execute(text(query))
 
-    counties = []
+    import json
+
+    features = []
 
     for row in result:
-        counties.append({
-            "id": row.id,
-            "name": row.name,
-            "geometry": row.geojson
+        features.append({
+            "type": "Feature",
+            "properties": {
+                "id": row.id,
+                "name": row.name
+            },
+            "geometry": json.loads(row.geojson)
         })
 
-    return counties
+    return {
+        "type": "FeatureCollection",
+        "features": features
+    }
 
 def get_wards(db: Session):
 
@@ -32,7 +40,7 @@ def get_wards(db: Session):
         id,
         name,
         ST_AsGeoJSON(geometry) as geojson
-    FROM admin_ward
+    FROM wards
     """
 
     result = db.execute(text(query))
@@ -50,7 +58,7 @@ def get_subcounties(db: Session):
         id,
         name,
         ST_AsGeoJSON(geometry) as geojson
-    FROM admin_subcounty
+    FROM subcounties
     """
 
     result = db.execute(text(query))
