@@ -1,0 +1,57 @@
+# ENV & SECRETS
+.env
+.env.*
+*.env
+
+# PYTHON
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# VIRTUAL ENV (CRITICAL)
+venv/
+env/
+ENV/
+
+# YOUR DATA FOLDER (CRITICAL)
+data/
+
+# If later you want some data tracked:
+# !data/README.md
+# GEO / HEAVY FILES
+*.geojson
+*.shp
+*.shx
+*.dbf
+*.prj
+*.qmd
+*.tif
+*.tiff
+*.csv
+*.json
+
+# BUT keep configs if needed:
+!*.config.json
+
+# OUTPUTS / ANALYSIS FILES
+outputs/
+tmp/
+# IDE / SYSTEM
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 📦 LOGS
+*.log
+
+# KEYS
+*.pem
+*.key
+id_rsa
+id_ed25519
+
+# TEST CACHE
+.pytest_cache/
+.coverage
