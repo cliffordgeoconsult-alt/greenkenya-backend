@@ -12,6 +12,7 @@ from app.services.forest_intelligence_service import (
     run_non_reserve_forest_analysis
 )
 from app.services.forest_registry_service import generate_forest_registry
+from app.services.radd_gfw_service import ingest_radd_alerts_gfw
 from app.services.reserve_loader_service import load_forest_reserves
 from app.services.reserve_analysis_service import compute_reserve_forests
 
@@ -92,3 +93,7 @@ def reserve_loss_analysis(db: Session = Depends(get_db)):
 @router.get("/forest-analysis/non-reserve")
 def non_reserve_forest_analysis(db: Session = Depends(get_db)):
     return run_non_reserve_forest_analysis(db)
+
+@router.get("/ingest-radd")
+def ingest_radd(db: Session = Depends(get_db)):
+    return ingest_radd_alerts_gfw(db)

@@ -31,7 +31,7 @@ app.add_middleware(
 )
 
 # Creating tables
-# Base.metadata.create_all(bind=engine)
+Base.metadata.create_all(bind=engine)
 
 # Routers come AFTER middleware
 app.include_router(api_router, prefix="/api/v1")

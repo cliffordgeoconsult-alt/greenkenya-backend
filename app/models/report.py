@@ -1,8 +1,9 @@
+# app/models/report.py
 from sqlalchemy import Column, String, DateTime, Float, Text
 from sqlalchemy.dialects.postgresql import UUID
 from datetime import datetime
 import uuid
-
+from sqlalchemy import JSON
 from app.db.base import Base
 
 
@@ -21,7 +22,7 @@ class CommunityReport(Base):
     latitude = Column(Float, nullable=True)
     longitude = Column(Float, nullable=True)
 
-    evidence_url = Column(String, nullable=True)
+    images = Column(JSON, nullable=True)  # max 2 images
 
     status = Column(String, default="pending")  # pending, verified, rejected
     confidence_score = Column(Float, default=0.2)

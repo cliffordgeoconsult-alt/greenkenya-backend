@@ -1,12 +1,26 @@
+# app/services/report_service.py
 from sqlalchemy.orm import Session
 from app.models.report import CommunityReport
 from app.utils.geo import to_grid
 from app.models.report_validation import ReportValidation
-from app.models.report import CommunityReport
 
 
 def create_report(db: Session, data):
     grid = to_grid(data.latitude, data.longitude)
+
+    # DESCRIPTION VALIDATION
+    if data.report_type == "other":
+        if not data.description or len(data.description.strip()) < 10:
+            raise ValueError("Description required for 'other' reports")
+
+    # IMAGE VALIDATION
+    if data.images:
+        if len(data.images) > 2:
+            raise ValueError("Maximum 2 images allowed")
+
+        for img in data.images:
+            if not img.lower().endswith((".jpg", ".jpeg", ".png")):
+                raise ValueError("Only JPG and PNG allowed")
 
     report = CommunityReport(
         report_type=data.report_type,
@@ -14,7 +28,7 @@ def create_report(db: Session, data):
         location_grid=grid,
         latitude=data.latitude,
         longitude=data.longitude,
-        evidence_url=data.evidence_url,
+        images=data.images,
         status="pending",
         confidence_score=0.2,
         report_mode="anonymous"

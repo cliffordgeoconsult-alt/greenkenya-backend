@@ -20,12 +20,17 @@ from app.services.gee.forest_analysis import (
 from app.services.admin_service import get_counties
 from app.services.admin_service import get_subcounties
 from app.services.admin_service import get_wards
+from app.services.radd_analytics_service import (
+    get_radd_yearly,
+    get_radd_monthly_current_year
+)
+from app.services.radd_query_service import get_radd_loss_for_geometry
 
 def run_vegetation_analysis(db):
 
     initialize_ee()
 
-    counties = get_counties(db)
+    counties = get_counties(db)[:1]  # test first 10
 
     results = []
 
@@ -33,6 +38,12 @@ def run_vegetation_analysis(db):
 
         geojson = json.loads(county["geometry"])
         ee_geom = ee.Geometry(geojson)
+        radd_loss_ha = get_radd_loss_for_geometry(
+            db,
+            json.dumps(geojson)
+        )
+        radd_yearly = get_radd_yearly(db, json.dumps(geojson))
+        radd_monthly = get_radd_monthly_current_year(db, json.dumps(geojson))
 
         tree30_stats, tree50_stats = county_tree_cover_area(ee_geom)
         forest_stats = county_forest_area(ee_geom)
@@ -94,6 +105,9 @@ def run_vegetation_analysis(db):
             "sar_yearly": sar_yearly,
             "sar_loss": sar_loss,
             "sar_loss_monthly": sar_loss_monthly,
+            "radd_loss_ha": round(radd_loss_ha, 2),
+            "radd_yearly": radd_yearly,
+            "radd_monthly": radd_monthly,
             "combined_tree_cover_ha": combined_tree_cover,
             "confidence": confidence
         })
@@ -105,7 +119,7 @@ def run_ward_vegetation_analysis(db):
 
     initialize_ee()
 
-    wards = get_wards(db)
+    wards = get_wards(db)[:1]
 
     results = []
 
@@ -139,7 +153,7 @@ def run_subcounty_vegetation_analysis(db):
 
     initialize_ee()
 
-    subcounties = get_subcounties(db)
+    subcounties = get_subcounties(db)[:1]
 
     results = []
 
@@ -209,7 +223,7 @@ def run_reserve_loss_analysis(db):
 
     results = []
 
-    for r in reserves[:50]:  # test first
+    for r in reserves[:10]:  # test first 10
 
         reserve_id = r[0]
         name = r[1]
@@ -258,7 +272,7 @@ def run_non_reserve_forest_analysis(db):
 
     results = []
 
-    for f in forests[:50]:
+    for f in forests[:10]:
 
         forest_id = f[0]
         forest_code = f[1]
