@@ -7,6 +7,7 @@ from app.schemas.report import ReportCreate, ReportResponse
 from app.schemas.report_validation import ValidationCreate
 from app.services.report_service import create_report, validate_report
 from app.models.report import CommunityReport
+from app.models.report_validation import ReportValidation
 
 router = APIRouter()
 
@@ -52,6 +53,10 @@ def delete_report(report_id: str, db: Session = Depends(get_db)):
     if not report:
         return {"error": "Report not found"}
 
+    # DELETE VALIDATIONS FIRST
+    db.query(ReportValidation).filter(ReportValidation.report_id == report_id).delete()
+
+    # THEN DELETE REPORT
     db.delete(report)
     db.commit()
 
