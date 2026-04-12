@@ -1,5 +1,5 @@
+# schemas/forest.py
 from pydantic import BaseModel
-
 
 class ForestCreate(BaseModel):
     forest_code: str

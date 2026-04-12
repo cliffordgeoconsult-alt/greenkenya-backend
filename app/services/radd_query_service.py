@@ -11,10 +11,9 @@ def get_radd_loss_for_geometry(db: Session, geometry_geojson):
     query = text("""
         SELECT COALESCE(SUM(loss_ha), 0) as total_loss
         FROM radd_alerts
-        WHERE ST_DWithin(
-            geometry::geography,
-            ST_SetSRID(ST_GeomFromGeoJSON(:geom), 4326)::geography,
-            100
+        WHERE ST_Intersects(
+            geometry,
+            ST_SetSRID(ST_GeomFromGeoJSON(:geom), 4326)
         )
     """)
 

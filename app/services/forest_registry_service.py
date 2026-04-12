@@ -46,7 +46,7 @@ def generate_forest_registry(db: Session):
                 continue
 
             try:
-                # ✅ STRONG UNIQUE CODE (no collisions)
+                # STRONG UNIQUE CODE (no collisions)
                 forest_code = f"{county['name']}_{i}_{uuid.uuid4().hex[:8]}"
 
                 new_forest = Forest(
@@ -76,7 +76,7 @@ def generate_forest_registry(db: Session):
             except Exception as e:
                 print("INSERT ERROR:", e)
 
-                # ✅ CRITICAL FIX (reset broken session)
+                # reseting broken session
                 db.rollback()
 
         db.commit()

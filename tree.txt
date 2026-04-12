@@ -3,6 +3,7 @@ Volume serial number is D016-E3FA
 C:.
 |   .env
 |   .gitignore
+|   greenkenya.dump
 |   README.md
 |   requirements.txt
 |   service-account.json
@@ -21,6 +22,7 @@ C:.
 |   |   |   |   counties.py
 |   |   |   |   forests.py
 |   |   |   |   reports.py
+|   |   |   |   subcounties.py
 |   |   |   |   wards.py
 |   |   |   |   __init__.py
 |   |   |   |   
@@ -28,6 +30,7 @@ C:.
 |   |   |           counties.cpython-313.pyc
 |   |   |           forests.cpython-313.pyc
 |   |   |           reports.cpython-313.pyc
+|   |   |           subcounties.cpython-313.pyc
 |   |   |           wards.cpython-313.pyc
 |   |   |           __init__.cpython-313.pyc
 |   |   |           
@@ -50,6 +53,7 @@ C:.
 |   +---models
 |   |   |   county.py
 |   |   |   forest.py
+|   |   |   radd_alert.py
 |   |   |   report.py
 |   |   |   report_validation.py
 |   |   |   ward.py
@@ -83,6 +87,10 @@ C:.
 |   |   |   forest_intelligence_service.py
 |   |   |   forest_registry_service.py
 |   |   |   forest_service.py
+|   |   |   gfw_auth_test.py
+|   |   |   radd_analytics_service.py
+|   |   |   radd_gfw_service.py
+|   |   |   radd_query_service.py
 |   |   |   report_service.py
 |   |   |   reserve_analysis_service.py
 |   |   |   reserve_loader_service.py
@@ -105,6 +113,10 @@ C:.
 |   |           forest_intelligence_service.cpython-313.pyc
 |   |           forest_registry_service.cpython-313.pyc
 |   |           forest_service.cpython-313.pyc
+|   |           radd_analytics_service.cpython-313.pyc
+|   |           radd_gfw_service.cpython-313.pyc
+|   |           radd_query_service.cpython-313.pyc
+|   |           radd_service.cpython-313.pyc
 |   |           report_service.cpython-313.pyc
 |   |           reserve_analysis_service.cpython-313.pyc
 |   |           reserve_loader_service.cpython-313.pyc
@@ -173,6 +185,253 @@ C:.
     |       |   typing_extensions.py
     |       |   _cffi_backend.cp313-win_amd64.pyd
     |       |   
+    |       +---alembic
+    |       |   |   command.py
+    |       |   |   config.py
+    |       |   |   context.py
+    |       |   |   context.pyi
+    |       |   |   environment.py
+    |       |   |   migration.py
+    |       |   |   op.py
+    |       |   |   op.pyi
+    |       |   |   py.typed
+    |       |   |   __init__.py
+    |       |   |   __main__.py
+    |       |   |   
+    |       |   +---autogenerate
+    |       |   |   |   api.py
+    |       |   |   |   render.py
+    |       |   |   |   rewriter.py
+    |       |   |   |   __init__.py
+    |       |   |   |   
+    |       |   |   +---compare
+    |       |   |   |   |   comments.py
+    |       |   |   |   |   constraints.py
+    |       |   |   |   |   schema.py
+    |       |   |   |   |   server_defaults.py
+    |       |   |   |   |   tables.py
+    |       |   |   |   |   types.py
+    |       |   |   |   |   util.py
+    |       |   |   |   |   __init__.py
+    |       |   |   |   |   
+    |       |   |   |   \---__pycache__
+    |       |   |   |           comments.cpython-313.pyc
+    |       |   |   |           constraints.cpython-313.pyc
+    |       |   |   |           schema.cpython-313.pyc
+    |       |   |   |           server_defaults.cpython-313.pyc
+    |       |   |   |           tables.cpython-313.pyc
+    |       |   |   |           types.cpython-313.pyc
+    |       |   |   |           util.cpython-313.pyc
+    |       |   |   |           __init__.cpython-313.pyc
+    |       |   |   |           
+    |       |   |   \---__pycache__
+    |       |   |           api.cpython-313.pyc
+    |       |   |           render.cpython-313.pyc
+    |       |   |           rewriter.cpython-313.pyc
+    |       |   |           __init__.cpython-313.pyc
+    |       |   |           
+    |       |   +---ddl
+    |       |   |   |   base.py
+    |       |   |   |   impl.py
+    |       |   |   |   mssql.py
+    |       |   |   |   mysql.py
+    |       |   |   |   oracle.py
+    |       |   |   |   postgresql.py
+    |       |   |   |   sqlite.py
+    |       |   |   |   _autogen.py
+    |       |   |   |   __init__.py
+    |       |   |   |   
+    |       |   |   \---__pycache__
+    |       |   |           base.cpython-313.pyc
+    |       |   |           impl.cpython-313.pyc
+    |       |   |           mssql.cpython-313.pyc
+    |       |   |           mysql.cpython-313.pyc
+    |       |   |           oracle.cpython-313.pyc
+    |       |   |           postgresql.cpython-313.pyc
+    |       |   |           sqlite.cpython-313.pyc
+    |       |   |           _autogen.cpython-313.pyc
+    |       |   |           __init__.cpython-313.pyc
+    |       |   |           
+    |       |   +---operations
+    |       |   |   |   base.py
+    |       |   |   |   batch.py
+    |       |   |   |   ops.py
+    |       |   |   |   schemaobj.py
+    |       |   |   |   toimpl.py
+    |       |   |   |   __init__.py
+    |       |   |   |   
+    |       |   |   \---__pycache__
+    |       |   |           base.cpython-313.pyc
+    |       |   |           batch.cpython-313.pyc
+    |       |   |           ops.cpython-313.pyc
+    |       |   |           schemaobj.cpython-313.pyc
+    |       |   |           toimpl.cpython-313.pyc
+    |       |   |           __init__.cpython-313.pyc
+    |       |   |           
+    |       |   +---runtime
+    |       |   |   |   environment.py
+    |       |   |   |   migration.py
+    |       |   |   |   plugins.py
+    |       |   |   |   __init__.py
+    |       |   |   |   
+    |       |   |   \---__pycache__
+    |       |   |           environment.cpython-313.pyc
+    |       |   |           migration.cpython-313.pyc
+    |       |   |           plugins.cpython-313.pyc
+    |       |   |           __init__.cpython-313.pyc
+    |       |   |           
+    |       |   +---script
+    |       |   |   |   base.py
+    |       |   |   |   revision.py
+    |       |   |   |   write_hooks.py
+    |       |   |   |   __init__.py
+    |       |   |   |   
+    |       |   |   \---__pycache__
+    |       |   |           base.cpython-313.pyc
+    |       |   |           revision.cpython-313.pyc
+    |       |   |           write_hooks.cpython-313.pyc
+    |       |   |           __init__.cpython-313.pyc
+    |       |   |           
+    |       |   +---templates
+    |       |   |   +---async
+    |       |   |   |   |   alembic.ini.mako
+    |       |   |   |   |   env.py
+    |       |   |   |   |   README
+    |       |   |   |   |   script.py.mako
+    |       |   |   |   |   
+    |       |   |   |   \---__pycache__
+    |       |   |   |           env.cpython-313.pyc
+    |       |   |   |           
+    |       |   |   +---generic
+    |       |   |   |   |   alembic.ini.mako
+    |       |   |   |   |   env.py
+    |       |   |   |   |   README
+    |       |   |   |   |   script.py.mako
+    |       |   |   |   |   
+    |       |   |   |   \---__pycache__
+    |       |   |   |           env.cpython-313.pyc
+    |       |   |   |           
+    |       |   |   +---multidb
+    |       |   |   |   |   alembic.ini.mako
+    |       |   |   |   |   env.py
+    |       |   |   |   |   README
+    |       |   |   |   |   script.py.mako
+    |       |   |   |   |   
+    |       |   |   |   \---__pycache__
+    |       |   |   |           env.cpython-313.pyc
+    |       |   |   |           
+    |       |   |   +---pyproject
+    |       |   |   |   |   alembic.ini.mako
+    |       |   |   |   |   env.py
+    |       |   |   |   |   pyproject.toml.mako
+    |       |   |   |   |   README
+    |       |   |   |   |   script.py.mako
+    |       |   |   |   |   
+    |       |   |   |   \---__pycache__
+    |       |   |   |           env.cpython-313.pyc
+    |       |   |   |           
+    |       |   |   \---pyproject_async
+    |       |   |       |   alembic.ini.mako
+    |       |   |       |   env.py
+    |       |   |       |   pyproject.toml.mako
+    |       |   |       |   README
+    |       |   |       |   script.py.mako
+    |       |   |       |   
+    |       |   |       \---__pycache__
+    |       |   |               env.cpython-313.pyc
+    |       |   |               
+    |       |   +---testing
+    |       |   |   |   assertions.py
+    |       |   |   |   env.py
+    |       |   |   |   fixtures.py
+    |       |   |   |   requirements.py
+    |       |   |   |   schemacompare.py
+    |       |   |   |   util.py
+    |       |   |   |   warnings.py
+    |       |   |   |   __init__.py
+    |       |   |   |   
+    |       |   |   +---plugin
+    |       |   |   |   |   bootstrap.py
+    |       |   |   |   |   __init__.py
+    |       |   |   |   |   
+    |       |   |   |   \---__pycache__
+    |       |   |   |           bootstrap.cpython-313.pyc
+    |       |   |   |           __init__.cpython-313.pyc
+    |       |   |   |           
+    |       |   |   +---suite
+    |       |   |   |   |   test_autogen_comments.py
+    |       |   |   |   |   test_autogen_computed.py
+    |       |   |   |   |   test_autogen_diffs.py
+    |       |   |   |   |   test_autogen_fks.py
+    |       |   |   |   |   test_autogen_identity.py
+    |       |   |   |   |   test_environment.py
+    |       |   |   |   |   test_op.py
+    |       |   |   |   |   _autogen_fixtures.py
+    |       |   |   |   |   __init__.py
+    |       |   |   |   |   
+    |       |   |   |   \---__pycache__
+    |       |   |   |           test_autogen_comments.cpython-313.pyc
+    |       |   |   |           test_autogen_computed.cpython-313.pyc
+    |       |   |   |           test_autogen_diffs.cpython-313.pyc
+    |       |   |   |           test_autogen_fks.cpython-313.pyc
+    |       |   |   |           test_autogen_identity.cpython-313.pyc
+    |       |   |   |           test_environment.cpython-313.pyc
+    |       |   |   |           test_op.cpython-313.pyc
+    |       |   |   |           _autogen_fixtures.cpython-313.pyc
+    |       |   |   |           __init__.cpython-313.pyc
+    |       |   |   |           
+    |       |   |   \---__pycache__
+    |       |   |           assertions.cpython-313.pyc
+    |       |   |           env.cpython-313.pyc
+    |       |   |           fixtures.cpython-313.pyc
+    |       |   |           requirements.cpython-313.pyc
+    |       |   |           schemacompare.cpython-313.pyc
+    |       |   |           util.cpython-313.pyc
+    |       |   |           warnings.cpython-313.pyc
+    |       |   |           __init__.cpython-313.pyc
+    |       |   |           
+    |       |   +---util
+    |       |   |   |   compat.py
+    |       |   |   |   editor.py
+    |       |   |   |   exc.py
+    |       |   |   |   langhelpers.py
+    |       |   |   |   messaging.py
+    |       |   |   |   pyfiles.py
+    |       |   |   |   sqla_compat.py
+    |       |   |   |   __init__.py
+    |       |   |   |   
+    |       |   |   \---__pycache__
+    |       |   |           compat.cpython-313.pyc
+    |       |   |           editor.cpython-313.pyc
+    |       |   |           exc.cpython-313.pyc
+    |       |   |           langhelpers.cpython-313.pyc
+    |       |   |           messaging.cpython-313.pyc
+    |       |   |           pyfiles.cpython-313.pyc
+    |       |   |           sqla_compat.cpython-313.pyc
+    |       |   |           __init__.cpython-313.pyc
+    |       |   |           
+    |       |   \---__pycache__
+    |       |           command.cpython-313.pyc
+    |       |           config.cpython-313.pyc
+    |       |           context.cpython-313.pyc
+    |       |           environment.cpython-313.pyc
+    |       |           migration.cpython-313.pyc
+    |       |           op.cpython-313.pyc
+    |       |           __init__.cpython-313.pyc
+    |       |           __main__.cpython-313.pyc
+    |       |           
+    |       +---alembic-1.18.4.dist-info
+    |       |   |   entry_points.txt
+    |       |   |   INSTALLER
+    |       |   |   METADATA
+    |       |   |   RECORD
+    |       |   |   REQUESTED
+    |       |   |   top_level.txt
+    |       |   |   WHEEL
+    |       |   |   
+    |       |   \---licenses
+    |       |           LICENSE
+    |       |           
     |       +---annotated_doc
     |       |   |   main.py
     |       |   |   py.typed
@@ -8898,6 +9157,95 @@ C:.
     |       |   \---__pycache__
     |       |           main.cpython-313.pyc
     |       |           __init__.cpython-313.pyc
+    |       |           
+    |       +---mako
+    |       |   |   ast.py
+    |       |   |   cache.py
+    |       |   |   cmd.py
+    |       |   |   codegen.py
+    |       |   |   compat.py
+    |       |   |   exceptions.py
+    |       |   |   filters.py
+    |       |   |   lexer.py
+    |       |   |   lookup.py
+    |       |   |   parsetree.py
+    |       |   |   pygen.py
+    |       |   |   pyparser.py
+    |       |   |   runtime.py
+    |       |   |   template.py
+    |       |   |   util.py
+    |       |   |   _ast_util.py
+    |       |   |   __init__.py
+    |       |   |   
+    |       |   +---ext
+    |       |   |   |   autohandler.py
+    |       |   |   |   babelplugin.py
+    |       |   |   |   beaker_cache.py
+    |       |   |   |   extract.py
+    |       |   |   |   linguaplugin.py
+    |       |   |   |   preprocessors.py
+    |       |   |   |   pygmentplugin.py
+    |       |   |   |   turbogears.py
+    |       |   |   |   __init__.py
+    |       |   |   |   
+    |       |   |   \---__pycache__
+    |       |   |           autohandler.cpython-313.pyc
+    |       |   |           babelplugin.cpython-313.pyc
+    |       |   |           beaker_cache.cpython-313.pyc
+    |       |   |           extract.cpython-313.pyc
+    |       |   |           linguaplugin.cpython-313.pyc
+    |       |   |           preprocessors.cpython-313.pyc
+    |       |   |           pygmentplugin.cpython-313.pyc
+    |       |   |           turbogears.cpython-313.pyc
+    |       |   |           __init__.cpython-313.pyc
+    |       |   |           
+    |       |   +---testing
+    |       |   |   |   assertions.py
+    |       |   |   |   config.py
+    |       |   |   |   exclusions.py
+    |       |   |   |   fixtures.py
+    |       |   |   |   helpers.py
+    |       |   |   |   _config.py
+    |       |   |   |   __init__.py
+    |       |   |   |   
+    |       |   |   \---__pycache__
+    |       |   |           assertions.cpython-313.pyc
+    |       |   |           config.cpython-313.pyc
+    |       |   |           exclusions.cpython-313.pyc
+    |       |   |           fixtures.cpython-313.pyc
+    |       |   |           helpers.cpython-313.pyc
+    |       |   |           _config.cpython-313.pyc
+    |       |   |           __init__.cpython-313.pyc
+    |       |   |           
+    |       |   \---__pycache__
+    |       |           ast.cpython-313.pyc
+    |       |           cache.cpython-313.pyc
+    |       |           cmd.cpython-313.pyc
+    |       |           codegen.cpython-313.pyc
+    |       |           compat.cpython-313.pyc
+    |       |           exceptions.cpython-313.pyc
+    |       |           filters.cpython-313.pyc
+    |       |           lexer.cpython-313.pyc
+    |       |           lookup.cpython-313.pyc
+    |       |           parsetree.cpython-313.pyc
+    |       |           pygen.cpython-313.pyc
+    |       |           pyparser.cpython-313.pyc
+    |       |           runtime.cpython-313.pyc
+    |       |           template.cpython-313.pyc
+    |       |           util.cpython-313.pyc
+    |       |           _ast_util.cpython-313.pyc
+    |       |           __init__.cpython-313.pyc
+    |       |           
+    |       +---mako-1.3.10.dist-info
+    |       |   |   entry_points.txt
+    |       |   |   INSTALLER
+    |       |   |   METADATA
+    |       |   |   RECORD
+    |       |   |   top_level.txt
+    |       |   |   WHEEL
+    |       |   |   
+    |       |   \---licenses
+    |       |           LICENSE
     |       |           
     |       +---markupsafe
     |       |   |   py.typed
@@ -27629,6 +27977,7 @@ C:.
     |       activate.bat
     |       activate.fish
     |       Activate.ps1
+    |       alembic.exe
     |       deactivate.bat
     |       dotenv.exe
     |       earthengine.exe
@@ -27640,6 +27989,7 @@ C:.
     |       geocode.exe
     |       ipython.exe
     |       ipython3.exe
+    |       mako-render.exe
     |       normalizer.exe
     |       numpy-config.exe
     |       pasteurize.exe

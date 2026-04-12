@@ -1,3 +1,4 @@
+# app/services/forest_intelligence_service.py
 import json
 import ee
 from sqlalchemy import text
@@ -10,11 +11,6 @@ from app.services.gee.forest_analysis import (
     county_total_loss,
     get_loss_histogram, 
     build_yearly_loss,
-    get_dynamic_world_yearly,
-    get_dynamic_world_monthly_current_year,
-    get_sar_forest_yearly,
-    get_sar_loss_yearly,
-    get_sar_loss_monthly_current_year,
     get_forest_gain_total
 )
 from app.services.admin_service import get_counties
@@ -30,7 +26,7 @@ def run_vegetation_analysis(db):
 
     initialize_ee()
 
-    counties = get_counties(db)[:1]  # test first 10
+    counties = get_counties(db)[:10]  # testing first 10
 
     results = []
 
@@ -55,41 +51,10 @@ def run_vegetation_analysis(db):
         # YEARLY ANALYSIS 
         stats = get_loss_histogram(ee_geom)
         yearly_data = build_yearly_loss(stats)
-        dw_yearly = get_dynamic_world_yearly(ee_geom)
-        dw_monthly = get_dynamic_world_monthly_current_year(ee_geom)
-        sar_loss_monthly = get_sar_loss_monthly_current_year(ee_geom)
-        sar_yearly = get_sar_forest_yearly(ee_geom)
-        sar_loss = get_sar_loss_yearly(ee_geom)
 
         # simple confidence logic
         confidence = "high"
 
-        if not dw_yearly or not sar_yearly:
-            confidence = "low"
-        else:
-            dw_latest = dw_yearly[-1]["coverage_ha"]
-            sar_latest = sar_yearly[-1]["coverage_ha"]
-            baseline = forest_m2 / 10000
-
-            diff_dw = abs(dw_latest - baseline)
-            diff_sar = abs(sar_latest - baseline)
-
-            if diff_dw > 3000 or diff_sar > 3000:
-                confidence = "low"
-            elif diff_dw > 1500 or diff_sar > 1500:
-                confidence = "medium"
-            # ✅ COMBINE TREE COVER (REALISTIC)
-            combined_tree_cover = None
-
-    if dw_yearly and sar_yearly:
-        dw_latest = dw_yearly[-1]["coverage_ha"]
-        sar_latest = sar_yearly[-1]["coverage_ha"]
-
-        # 🔥 WEIGHTED FUSION (REALISTIC)
-        combined_tree_cover = (
-            0.7 * dw_latest +
-            0.3 * sar_latest
-        )
         gain_stats = get_forest_gain_total(ee_geom)
         gain_m2 = gain_stats.getInfo().get("gain", 0)
         gain_ha = round(gain_m2 / 10000, 2)
@@ -100,15 +65,9 @@ def run_vegetation_analysis(db):
             "forest_area_ha": round(forest_m2 / 10000, 2),
             "forest_gain_2000_2012_ha": gain_ha,
             "yearly_forest": yearly_data,
-            "dynamic_world_yearly": dw_yearly,
-            "dynamic_world_monthly": dw_monthly,
-            "sar_yearly": sar_yearly,
-            "sar_loss": sar_loss,
-            "sar_loss_monthly": sar_loss_monthly,
             "radd_loss_ha": round(radd_loss_ha, 2),
             "radd_yearly": radd_yearly,
             "radd_monthly": radd_monthly,
-            "combined_tree_cover_ha": combined_tree_cover,
             "confidence": confidence
         })
 
@@ -304,6 +263,90 @@ def run_non_reserve_forest_analysis(db):
         })
 
     save_intelligence(db, results, "non_reserve_forest")
+    return results
+
+def run_forest_intelligence(db):
+
+    initialize_ee()
+
+    forests = db.execute(text("""
+        SELECT 
+            forest_id,
+            forest_code,
+            county,
+            ST_AsGeoJSON(geometry)
+        FROM forests
+        LIMIT 100
+    """)).fetchall()
+
+    results = []
+
+    for f in forests:
+
+        forest_id = f[0]
+        forest_code = f[1]
+        county = f[2]
+        geojson = json.loads(f[3])
+
+        ee_geom = ee.Geometry(geojson)
+
+        # BASELINE
+        forest_stats = county_forest_area(ee_geom)
+        raw = forest_stats.getInfo().get("treecover2000")
+        baseline_ha = (raw or 0) / 10000
+
+        # LOSS
+        stats = get_loss_histogram(ee_geom)
+        yearly = build_yearly_loss(stats)
+
+        total_loss = yearly[-1]["loss_total_ha"] if yearly else 0
+
+        loss_pct = (total_loss / baseline_ha * 100) if baseline_ha > 0 else 0
+
+        # RADD
+        radd_yearly = get_radd_yearly(db, json.dumps(geojson))
+
+        alerts_count = sum([y.get("loss_ha", 0) for y in radd_yearly]) if radd_yearly else 0
+
+        # RESERVE CHECK
+        reserve = db.execute(text("""
+            SELECT name
+            FROM forest_reserves
+            WHERE ST_Intersects(
+                forest_reserves.geometry,
+                ST_SetSRID(ST_GeomFromGeoJSON(:geom), 4326)
+            )
+            LIMIT 1
+        """), {"geom": json.dumps(geojson)}).fetchone()
+
+        if reserve:
+            reserve_name = reserve[0]
+            is_protected = True
+        else:
+            reserve_name = None
+            is_protected = False
+
+        # RISK
+        if loss_pct > 30 or alerts_count > 20:
+            risk = "high"
+        elif loss_pct > 10 or alerts_count > 5:
+            risk = "medium"
+        else:
+            risk = "low"
+
+        results.append({
+            "forest_id": forest_id,
+            "forest_code": forest_code,
+            "county": county,
+            "is_protected": is_protected,
+            "reserve_name": reserve_name,
+            "baseline_ha": round(baseline_ha, 2),
+            "yearly_loss": yearly,
+            "loss_ha": round(total_loss, 2),
+            "loss_pct": round(loss_pct, 2),
+            "alerts": alerts_count,
+            "risk": risk
+        })
     return results
 
 def save_intelligence(db, results, level):

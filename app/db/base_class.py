@@ -1,3 +1,4 @@
+# app/db/base_class.py
 from app.db.base import Base
 
 # Import ALL models here (ONLY HERE)

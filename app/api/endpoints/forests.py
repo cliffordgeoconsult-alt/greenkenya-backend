@@ -1,6 +1,7 @@
 # app/api/endpoints/forests.py
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from app.db.session import get_db
 from app.models.forest import Forest
 from app.services.forest_intelligence_service import (
@@ -9,7 +10,8 @@ from app.services.forest_intelligence_service import (
     run_subcounty_vegetation_analysis,
     run_national_vegetation_analysis,
     run_reserve_loss_analysis,
-    run_non_reserve_forest_analysis
+    run_non_reserve_forest_analysis,
+    run_forest_intelligence
 )
 from app.services.forest_registry_service import generate_forest_registry
 from app.services.radd_gfw_service import ingest_radd_alerts_gfw
@@ -48,7 +50,7 @@ def generate_registry(db: Session = Depends(get_db)):
 @router.get("/")
 def get_forests(db: Session = Depends(get_db)):
 
-    forests = db.query(Forest).limit(100).all()
+    forests = db.query(Forest).limit(500).all()
 
     features = []
 
@@ -71,8 +73,9 @@ def get_forests(db: Session = Depends(get_db)):
         })
 
     return {
+        "type": "FeatureCollection",
         "count": len(features),
-        "features": features[:50]
+        "features": features
     }
 
 @router.get("/load-reserves")
@@ -94,6 +97,40 @@ def reserve_loss_analysis(db: Session = Depends(get_db)):
 def non_reserve_forest_analysis(db: Session = Depends(get_db)):
     return run_non_reserve_forest_analysis(db)
 
+@router.get("/intelligence")
+def forest_intelligence(db: Session = Depends(get_db)):
+    return run_forest_intelligence(db)
+
 @router.get("/ingest-radd")
 def ingest_radd(db: Session = Depends(get_db)):
     return ingest_radd_alerts_gfw(db)
+
+@router.get("/reserves")
+def get_reserves(db: Session = Depends(get_db)):
+
+    reserves = db.execute(text("""
+        SELECT 
+            reserve_id,
+            name,
+            ST_AsGeoJSON(geometry)
+        FROM forest_reserves
+        LIMIT 200
+    """)).fetchall()
+
+    features = []
+
+    for r in reserves:
+        features.append({
+            "type": "Feature",
+            "geometry": json.loads(r[2]),
+            "properties": {
+                "reserve_id": r[0],
+                "name": r[1]
+            }
+        })
+
+    return {
+        "type": "FeatureCollection",
+        "count": len(features),
+        "features": features
+    }

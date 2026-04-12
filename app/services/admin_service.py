@@ -1,6 +1,6 @@
+# app/services/admin_service.py
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-
 
 def get_counties(db: Session):
 
