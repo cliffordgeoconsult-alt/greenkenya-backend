@@ -6,7 +6,7 @@ def generate_radd_hotspots(db):
     hotspots = db.execute(text("""
         WITH clustered AS (
             SELECT
-                ST_ClusterDBSCAN(geometry, eps := 0.01, minpoints := 5) OVER () AS cluster_id,
+                ST_ClusterDBSCAN(geometry, eps := 0.05, minpoints := 3)
                 geometry,
                 loss_ha,
                 alert_date
