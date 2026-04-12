@@ -15,6 +15,7 @@ from app.services.forest_intelligence_service import (
 )
 from app.services.forest_registry_service import generate_forest_registry
 from app.services.radd_gfw_service import ingest_radd_alerts_gfw
+from app.services.radd_hotspot_service import generate_radd_hotspots
 from app.services.reserve_loader_service import load_forest_reserves
 from app.services.reserve_analysis_service import compute_reserve_forests
 
@@ -104,6 +105,10 @@ def forest_intelligence(db: Session = Depends(get_db)):
 @router.get("/ingest-radd")
 def ingest_radd(db: Session = Depends(get_db)):
     return ingest_radd_alerts_gfw(db)
+
+@router.get("/hotspots")
+def get_hotspots(db: Session = Depends(get_db)):
+    return generate_radd_hotspots(db)
 
 @router.get("/reserves")
 def get_reserves(db: Session = Depends(get_db)):
