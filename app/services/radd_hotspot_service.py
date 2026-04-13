@@ -1,4 +1,3 @@
-# app/services/radd_hotspot_service.py
 from sqlalchemy import text
 
 def generate_radd_hotspots(db):
@@ -6,7 +5,11 @@ def generate_radd_hotspots(db):
     hotspots = db.execute(text("""
         WITH clustered AS (
             SELECT
-                ST_ClusterDBSCAN(geometry, eps := 0.05, minpoints := 3)
+                ST_ClusterDBSCAN(
+                    geometry,
+                    eps := 0.05,
+                    minpoints := 3
+                ) OVER () AS cluster_id,
                 geometry,
                 loss_ha,
                 alert_date
@@ -33,7 +36,6 @@ def generate_radd_hotspots(db):
         total_loss = h[2]
         geometry = h[3]
 
-        # severity logic
         if alerts_count >= 30:
             severity = "high"
         elif alerts_count >= 10:
