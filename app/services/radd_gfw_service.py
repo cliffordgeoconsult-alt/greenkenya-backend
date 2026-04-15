@@ -1,16 +1,17 @@
-# app/services/radd_gfw_service.py
 import ee
 import os
 import json
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 SERVICE_ACCOUNT = "greenmap-kenya@greenmap-kenya-483110.iam.gserviceaccount.com"
 
 
-# EE INIT (ONCE ONLY)
+# =========================
+# EE INIT
+# =========================
 def initialize_ee():
     try:
         service_account_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
@@ -29,144 +30,188 @@ def initialize_ee():
             )
 
         ee.Initialize(credentials)
-        print(" EE initialized")
+        print("✅ EE initialized")
 
     except Exception as e:
-        print(" EE init failed:", str(e))
+        print("❌ EE init failed:", str(e))
 
 
+# =========================
 # FETCH RADD ALERTS
+# =========================
 def fetch_radd_alerts_gee(geojson):
 
     geom = ee.Geometry(json.loads(geojson))
 
     collection = ee.ImageCollection("projects/glad/alert/UpdResult") \
         .filterBounds(geom) \
-        .filterDate("2024-01-01", "2026-12-31")
+        .filterDate("2025-01-01", "2026-12-31")
 
     size = collection.size().getInfo()
-    print(" COLLECTION SIZE:", size)
+    print("🔥 COLLECTION SIZE:", size)
 
     if size == 0:
         return []
 
-    image = collection.mosaic()
+    all_features = []
+    images = collection.toList(size)
 
-    band_names = image.bandNames().getInfo()
+    for i in range(size):
+        image = ee.Image(images.get(i))
+        band_names = image.bandNames().getInfo()
 
-    bands_to_use = []
+        bands_to_use = []
 
-    if "conf26" in band_names:
-        bands_to_use += ["conf26", "alertDate26"]
+        if "conf26" in band_names:
+            bands_to_use += ["conf26", "alertDate26"]
 
-    if "conf25" in band_names:
-        bands_to_use += ["conf25", "alertDate25"]
+        if "conf25" in band_names:
+            bands_to_use += ["conf25", "alertDate25"]
 
-    if not bands_to_use:
-        return []
+        if not bands_to_use:
+            continue
 
-    alerts = image.select(bands_to_use)
+        alerts = image.select(bands_to_use)
 
-    mask = ee.Image.constant(0)
+        mask = ee.Image.constant(0)
 
-    if "conf26" in band_names:
-        mask = mask.Or(image.select("conf26").gt(0))
+        if "conf26" in band_names:
+            mask = mask.Or(image.select("conf26").gt(0))
 
-    if "conf25" in band_names:
-        mask = mask.Or(image.select("conf25").gt(0))
+        if "conf25" in band_names:
+            mask = mask.Or(image.select("conf25").gt(0))
 
-    vectors = alerts.updateMask(mask).reduceToVectors(
-        geometry=geom,
-        scale=30,
-        geometryType="centroid",
-        reducer=ee.Reducer.first(),
-        maxPixels=1e13
-    )
+        vectors = alerts.updateMask(mask).reduceToVectors(
+            geometry=geom,
+            scale=10,
+            geometryType="centroid",
+            reducer=ee.Reducer.first(),
+            maxPixels=1e13
+        )
 
-    features = vectors.limit(200).getInfo()["features"]
+        features = vectors.getInfo().get("features", [])
+        all_features.extend(features)
 
-    print(" GEE ALERTS:", len(features))
+    print("🔥 TOTAL ALERTS (ALL IMAGES):", len(all_features))
 
-    return features
+    return all_features
 
 
-# INGEST INTO DB
+# =========================
+# INGEST INTO DB (FINAL FIXED)
+# =========================
 def ingest_radd_alerts_gfw(db: Session):
 
-    initialize_ee()  # ONLY ONCE
+    initialize_ee()
 
     counties = db.execute(text("""
         SELECT name, ST_AsGeoJSON(geometry)
         FROM admin_county
     """)).fetchall()
 
-    # LOAD EXISTING POINTS ONCE (FAST)
-    existing_points = db.execute(text("""
-        SELECT ST_X(geometry), ST_Y(geometry)
-        FROM radd_alerts
-    """)).fetchall()
-
-    existing_set = set((round(x, 5), round(y, 5)) for x, y in existing_points)
-
     total_inserted = 0
 
-    for county in counties[:5]:
+    for county in counties:
 
         county_name = county[0]
         geojson = county[1]
 
-        print(f"\n Processing county: {county_name}")
+        print(f"\n🔥 Processing county: {county_name}")
 
         alerts = fetch_radd_alerts_gee(geojson)
 
         if not alerts:
+            print("⚠️ No alerts found")
             continue
 
         batch = []
 
+        total_seen = 0
+        skipped_conf = 0
+        skipped_date = 0
+
         for f in alerts:
             try:
+                total_seen += 1
+
                 lon, lat = f["geometry"]["coordinates"]
-
-                point_key = (round(lon, 5), round(lat, 5))
-                if point_key in existing_set:
-                    continue
-
                 props = f.get("properties", {})
 
-                conf = props.get("conf26") or props.get("conf25") or 0.5
-                if conf == 0:
+                alert_date = None
+                conf = 0
+
+                # =========================
+                # PRIORITY: 2026 FIRST
+                # =========================
+                if props.get("alertDate26") and props.get("conf26"):
+                    try:
+                        days = int(props["alertDate26"])
+                        if 1 <= days <= 366:
+                            alert_date = datetime(2026, 1, 1) + timedelta(days=days - 1)
+                            conf = props.get("conf26")
+                    except:
+                        pass
+
+                # =========================
+                # FALLBACK: 2025
+                # =========================
+                elif props.get("alertDate25") and props.get("conf25"):
+                    try:
+                        days = int(props["alertDate25"])
+                        if 1 <= days <= 366:
+                            alert_date = datetime(2025, 1, 1) + timedelta(days=days - 1)
+                            conf = props.get("conf25")
+                    except:
+                        pass
+
+                # =========================
+                # SKIP IF NO DATE
+                # =========================
+                if alert_date is None:
+                    skipped_date += 1
                     continue
 
-                alert_date_val = props.get("alertDate26") or props.get("alertDate25")
+                # =========================
+                # FILTER NOISE
+                # =========================
+                if conf == 0:
+                    skipped_conf += 1
+                    continue
 
-                if alert_date_val:
-                    alert_date = datetime.utcfromtimestamp(alert_date_val / 1000)
-                else:
-                    alert_date = datetime.utcnow()
+                # =========================
+                # LOSS MODEL (CALIBRATED)
+                # =========================
+                loss_ha = 0.08
+
+                is_confirmed = str(int(conf)).startswith('3')
+                actual_confidence = 0.975 if is_confirmed else 0.85
 
                 batch.append({
                     "id": str(uuid.uuid4()),
                     "date": alert_date,
-                    "loss": 0.09,
-                    "confidence": conf / 100 if conf > 1 else conf,
+                    "loss": loss_ha,
+                    "confidence": actual_confidence,
                     "lon": lon,
                     "lat": lat
                 })
 
-                existing_set.add(point_key)  # prevent duplicates in same run
-
             except Exception:
                 continue
 
+        # =========================
+        # DEBUG LOGGING
+        # =========================
+        print(f"""
+📊 COUNTY SUMMARY: {county_name}
+TOTAL FEATURES: {total_seen}
+SKIPPED (CONF=0): {skipped_conf}
+SKIPPED (NO DATE): {skipped_date}
+TO INSERT: {len(batch)}
+""")
+
         if not batch:
-            print(" No new alerts")
+            print("⚠️ No new alerts to insert")
             continue
-
-        inserted = len(batch)
-        total_inserted += inserted
-
-        print(f" INSERTING {inserted} alerts for {county_name}")
 
         db.execute(text("""
             INSERT INTO radd_alerts (id, alert_date, loss_ha, confidence, geometry)
@@ -180,6 +225,10 @@ def ingest_radd_alerts_gfw(db: Session):
         """), batch)
 
         db.commit()
+
+        total_inserted += len(batch)
+
+        print(f"🔥 INSERTED {len(batch)} alerts for {county_name}")
 
     return {
         "message": "RADD ingestion complete",

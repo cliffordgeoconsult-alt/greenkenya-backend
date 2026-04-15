@@ -1,4 +1,3 @@
-# app/services/radd_analytics_service.py
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -20,7 +19,7 @@ def get_radd_yearly(db: Session, geom_geojson):
     rows = db.execute(query, {"geom": geom_geojson}).fetchall()
 
     return [
-        {"year": int(r[0]), "loss_ha": round(r[1], 2)}
+        {"year": int(r[0]), "loss_ha": round(r[1] or 0, 2)}
         for r in rows
     ]
 
@@ -44,6 +43,6 @@ def get_radd_monthly_current_year(db: Session, geom_geojson):
     rows = db.execute(query, {"geom": geom_geojson}).fetchall()
 
     return [
-        {"month": int(r[0]), "loss_ha": round(r[1], 2)}
+        {"month": int(r[0]), "loss_ha": round(r[1] or 0, 2)}
         for r in rows
     ]

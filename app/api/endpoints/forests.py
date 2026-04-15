@@ -107,8 +107,8 @@ def ingest_radd(db: Session = Depends(get_db)):
     return ingest_radd_alerts_gfw(db)
 
 @router.get("/hotspots")
-def get_hotspots(db: Session = Depends(get_db)):
-    return generate_radd_hotspots(db)
+def get_hotspots(days: int = 90, db: Session = Depends(get_db)):
+    return generate_radd_hotspots(db, days)
 
 @router.get("/reserves")
 def get_reserves(db: Session = Depends(get_db)):

@@ -64,11 +64,15 @@ def get_wards_by_county(db: Session, county_id: str):
 
     query = """
     SELECT
-        id,
-        name,
-        ST_AsGeoJSON(geometry) as geojson
-    FROM admin_ward
-    WHERE county_id = :county_id
+        w.id,
+        w.name,
+        ST_AsGeoJSON(
+            ST_Intersection(w.geometry, c.geometry)
+        ) as geojson
+    FROM admin_ward w
+    JOIN admin_county c
+    ON w.county_id = c.id
+    WHERE c.id = :county_id
     """
 
     result = db.execute(text(query), {"county_id": county_id})
@@ -80,10 +84,18 @@ def get_wards_by_county(db: Session, county_id: str):
 
 def get_subcounties_by_county(db: Session, county_id: str):
     query = """
-    SELECT id, name, ST_AsGeoJSON(geometry) as geojson
-    FROM admin_subcounty
-    WHERE county_id = :county_id
+    SELECT 
+        s.id,
+        s.name,
+        ST_AsGeoJSON(
+            ST_Intersection(s.geometry, c.geometry)
+        ) as geojson
+    FROM admin_subcounty s
+    JOIN admin_county c
+    ON s.county_id = c.id
+    WHERE c.id = :county_id
     """
+
     result = db.execute(text(query), {"county_id": county_id})
 
     return [

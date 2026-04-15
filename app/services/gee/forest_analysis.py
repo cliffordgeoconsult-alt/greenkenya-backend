@@ -1,5 +1,6 @@
 # app/services/gee/forest_analysis.py
 import ee
+from datetime import datetime
 
 # For COUNTY / REPORTING (scientific standard)
 def get_reporting_forest_mask():
@@ -203,3 +204,102 @@ def get_forest_gain_total(geometry):
     )
 
     return stats
+
+def get_dw_tree_probability(geometry, start_date, end_date):
+    """
+    Returns a smoothed tree probability map for a specific period.
+    This reduces the 'flicker' noise common in Dynamic World.
+    """
+    dw = ee.ImageCollection("GOOGLE/DYNAMICWORLD/V1") \
+        .filterBounds(geometry) \
+        .filterDate(start_date, end_date) \
+        .select('trees')
+    
+    # Use mean or median to smooth out cloud shadows/sensor noise
+    return dw.mean().clip(geometry)
+
+def calculate_dw_transition(geometry, start_year=2020, end_year=2025):
+    """
+    Compare baseline (2020) to current to detect REGROWTH or DEGRADATION.
+    """
+    baseline = get_dw_tree_probability(geometry, f'{start_year}-01-01', f'{start_year}-12-31')
+    current = get_dw_tree_probability(geometry, '2025-01-01', '2025-12-31')
+    
+    # Regrowth: Probability increased significantly
+    regrowth = current.subtract(baseline).gt(0.2).selfMask()
+    
+    # Degradation: Probability decreased significantly
+    degradation = baseline.subtract(current).gt(0.2).selfMask()
+    
+    pixel_area = ee.Image.pixelArea()
+    
+    regrowth_stats = regrowth.multiply(pixel_area).reduceRegion(
+        reducer=ee.Reducer.sum(),
+        geometry=geometry,
+        scale=10,
+        maxPixels=1e13
+    )
+    
+    return {
+        "regrowth_ha": round(ee.Number(regrowth_stats.get('trees')).getInfo() / 10000, 2),
+    }
+
+def calculate_yearly_coverage(geometry, start_year=2020, end_year=2026):
+    """
+    Calculates the total forested area (ha) for each year.
+    """
+    coverage_history = []
+    pixel_area = ee.Image.pixelArea()
+
+    for year in range(start_year, end_year + 1):
+        # Define the year window
+        start_date = f'{year}-01-01'
+        end_date = f'{year}-12-31'
+        
+        # If it's the current year (2026), only go up to today
+        if year == 2026:
+            end_date = datetime.now().strftime('%Y-%m-%d')
+
+        # Get smoothed tree probability for that specific year
+        tree_prob = get_dw_tree_probability(geometry, start_date, end_date)
+        
+        # Threshold: 0.5 probability counts as 'Forest Cover'
+        forest_mask = tree_prob.gt(0.5).selfMask()
+        
+        stats = forest_mask.multiply(pixel_area).reduceRegion(
+            reducer=ee.Reducer.sum(),
+            geometry=geometry,
+            scale=30,
+            maxPixels=1e13
+        ).getInfo()
+
+        area_ha = round((stats.get('trees') or 0) / 10000, 2)
+        
+        coverage_history.append({
+            "year": year,
+            "forest_extent_ha": area_ha
+        })
+
+    return coverage_history
+
+def calculate_degradation(geometry, start_year=2020, end_year=2025):
+    """
+    Detects degradation by finding pixels where the tree probability 
+    dropped significantly (0.2+ decrease) but stayed above 0.1 (not total loss).
+    """
+    baseline = get_dw_tree_probability(geometry, f'{start_year}-01-01', f'{start_year}-12-31')
+    current = get_dw_tree_probability(geometry, f'{end_year}-01-01', f'{end_year}-12-31')
+    
+    # Degradation formula: (Baseline - Current) > 0.2
+    # This captures thinning canopy, selective logging, or charcoal burning sites.
+    degradation_mask = baseline.subtract(current).gt(0.2).And(current.gt(0.1)).selfMask()
+    
+    pixel_area = ee.Image.pixelArea()
+    stats = degradation_mask.multiply(pixel_area).reduceRegion(
+        reducer=ee.Reducer.sum(),
+        geometry=geometry,
+        scale=10,
+        maxPixels=1e13
+    ).getInfo()
+
+    return round((stats.get('trees') or 0) / 10000, 2)

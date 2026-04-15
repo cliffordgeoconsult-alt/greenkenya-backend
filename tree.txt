@@ -90,6 +90,7 @@ C:.
 |   |   |   gfw_auth_test.py
 |   |   |   radd_analytics_service.py
 |   |   |   radd_gfw_service.py
+|   |   |   radd_hotspot_service.py
 |   |   |   radd_query_service.py
 |   |   |   report_service.py
 |   |   |   reserve_analysis_service.py
@@ -115,6 +116,7 @@ C:.
 |   |           forest_service.cpython-313.pyc
 |   |           radd_analytics_service.cpython-313.pyc
 |   |           radd_gfw_service.cpython-313.pyc
+|   |           radd_hotspot_service.cpython-313.pyc
 |   |           radd_query_service.cpython-313.pyc
 |   |           radd_service.cpython-313.pyc
 |   |           report_service.cpython-313.pyc
