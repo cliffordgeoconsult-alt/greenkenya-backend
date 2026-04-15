@@ -8,6 +8,7 @@ router = APIRouter()
 
 import json
 
+
 @router.get("/")
 def get_wards_endpoint(db: Session = Depends(get_db)):
     wards = get_wards(db)
@@ -19,7 +20,9 @@ def get_wards_endpoint(db: Session = Depends(get_db)):
             "type": "Feature",
             "properties": {
                 "id": w["id"],
-                "name": w["name"]
+                "name": w["name"],
+                "county_id": w["county_id"],       # ✅ FIX
+                "subcounty_id": w["subcounty_id"]  # ✅ FIX
             },
             "geometry": json.loads(w["geometry"])
         })
@@ -29,8 +32,8 @@ def get_wards_endpoint(db: Session = Depends(get_db)):
         "features": features
     }
 
-@router.get("/by-county/{county_id}")
 
+@router.get("/by-county/{county_id}")
 def get_wards_by_county_endpoint(county_id: str, db: Session = Depends(get_db)):
     wards = get_wards_by_county(db, county_id)
 
@@ -41,7 +44,9 @@ def get_wards_by_county_endpoint(county_id: str, db: Session = Depends(get_db)):
             "type": "Feature",
             "properties": {
                 "id": w["id"],
-                "name": w["name"]
+                "name": w["name"],
+                "county_id": w["county_id"],       # ✅ FIX
+                "subcounty_id": w["subcounty_id"]  # ✅ FIX
             },
             "geometry": json.loads(w["geometry"])
         })
@@ -51,17 +56,21 @@ def get_wards_by_county_endpoint(county_id: str, db: Session = Depends(get_db)):
         "features": features
     }
 
+
 @router.get("/by-subcounty/{subcounty_id}")
 def get_wards_by_sub(subcounty_id: str, db: Session = Depends(get_db)):
     wards = get_wards_by_subcounty(db, subcounty_id)
 
     features = []
+
     for w in wards:
         features.append({
             "type": "Feature",
             "properties": {
                 "id": w["id"],
-                "name": w["name"]
+                "name": w["name"],
+                "county_id": w["county_id"],       # ✅ FIX
+                "subcounty_id": w["subcounty_id"]  # ✅ FIX
             },
             "geometry": json.loads(w["geometry"])
         })
