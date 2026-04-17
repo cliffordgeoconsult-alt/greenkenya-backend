@@ -43,10 +43,17 @@ def calculate_risk(loss_pct, alerts_total, recent_alerts):
     else:
         return "low"
     
-def run_vegetation_analysis(db):
+def run_vegetation_analysis(db, level=None, entity_id=None):
     initialize_ee()
 
-    counties = get_counties(db)[:4]  # testing first 10
+    if level == "county" and entity_id:
+        counties = get_counties(db)
+        counties = [c for c in counties if str(c["id"]) == str(entity_id)]
+
+        if not counties:
+            return {"error": "County not found"}
+    else:
+        counties = get_counties(db)
     results = []
 
     # --- AUTO-UPDATE DATE LOGIC ---
@@ -777,7 +784,7 @@ def save_intelligence(db, results, level):
         entity_id = (
             r.get("forest_id")
             or r.get("reserve_id")
-            or r.get("county")
+            or r.get("county_id")
             or r.get("ward")
             or r.get("subcounty")
         )

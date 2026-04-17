@@ -30,8 +30,12 @@ router = APIRouter()
 
 
 @router.get("/forest-analysis")
-def forest_analysis(db: Session = Depends(get_db)):
-    return run_vegetation_analysis(db)
+def forest_analysis(
+    level: str = None,
+    entity_id: str = None,
+    db: Session = Depends(get_db)
+):
+    return run_vegetation_analysis(db, level, entity_id)
 
 @router.get("/forest-analysis/wards")
 def ward_forest_analysis(db: Session = Depends(get_db)):
