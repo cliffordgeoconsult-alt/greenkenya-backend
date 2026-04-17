@@ -1,4 +1,6 @@
 # app/api/endpoints/forests.py
+import json
+import ee
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -13,6 +15,8 @@ from app.services.forest_intelligence_service import (
     run_non_reserve_forest_analysis,
     run_forest_intelligence
 )
+from app.services.gee.forest_analysis import get_hansen_loss_tile
+from app.services.admin_service import get_counties, get_subcounties, get_wards
 from app.services.forest_registry_service import generate_forest_registry
 from app.services.radd_gfw_service import ingest_radd_alerts_gfw
 from app.services.radd_hotspot_service import generate_radd_hotspots
@@ -20,7 +24,7 @@ from app.services.reserve_loader_service import load_forest_reserves
 from app.services.reserve_analysis_service import compute_reserve_forests
 
 from geoalchemy2.shape import to_shape
-import json
+
 
 router = APIRouter()
 
@@ -138,4 +142,42 @@ def get_reserves(db: Session = Depends(get_db)):
         "type": "FeatureCollection",
         "count": len(features),
         "features": features
+    }
+
+@router.get("/deforestation-tile")
+def get_deforestation_tile(
+    level: str,
+    entity_id: str,
+    year: int,
+    db: Session = Depends(get_db)
+):
+
+    # initialize EE (important)
+    from app.services.gee.ee_init import initialize_ee
+    initialize_ee()
+
+    # get geometry
+    if level == "county":
+        entities = get_counties(db)
+    elif level == "subcounty":
+        entities = get_subcounties(db)
+    elif level == "ward":
+        entities = get_wards(db)
+    else:
+        return {"error": "Invalid level"}
+
+    entity = next((e for e in entities if str(e["id"]) == entity_id), None)
+
+    if not entity:
+        return {"error": "Entity not found"}
+
+    geojson = json.loads(entity["geometry"])
+    ee_geom = ee.Geometry(geojson)
+
+    # get tile
+    tile_url = get_hansen_loss_tile(ee_geom, year)
+
+    return {
+        "year": year,
+        "tile_url": tile_url
     }

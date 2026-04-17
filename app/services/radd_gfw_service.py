@@ -37,7 +37,7 @@ def initialize_ee():
 
 
 # =========================
-# FETCH RADD ALERTS
+# FETCH RADD ALERTS (NO LOSS)
 # =========================
 def fetch_radd_alerts_gee(geojson):
 
@@ -62,10 +62,10 @@ def fetch_radd_alerts_gee(geojson):
 
         bands_to_use = []
 
-        if "conf26" in band_names:
+        if "conf26" in band_names or "alertDate26" in band_names:
             bands_to_use += ["conf26", "alertDate26"]
 
-        if "conf25" in band_names:
+        if "conf25" in band_names or "alertDate25" in band_names:
             bands_to_use += ["conf25", "alertDate25"]
 
         if not bands_to_use:
@@ -73,13 +73,14 @@ def fetch_radd_alerts_gee(geojson):
 
         alerts = image.select(bands_to_use)
 
+        # 🔥 IMPORTANT: don't over-filter mask
         mask = ee.Image.constant(0)
 
         if "conf26" in band_names:
-            mask = mask.Or(image.select("conf26").gt(0))
+            mask = mask.Or(image.select("conf26").gte(1))
 
         if "conf25" in band_names:
-            mask = mask.Or(image.select("conf25").gt(0))
+            mask = mask.Or(image.select("conf25").gte(1))
 
         vectors = alerts.updateMask(mask).reduceToVectors(
             geometry=geom,
@@ -98,7 +99,7 @@ def fetch_radd_alerts_gee(geojson):
 
 
 # =========================
-# INGEST INTO DB (FINAL FIXED)
+# INGEST INTO DB (FIXED)
 # =========================
 def ingest_radd_alerts_gfw(db: Session):
 
@@ -127,7 +128,6 @@ def ingest_radd_alerts_gfw(db: Session):
         batch = []
 
         total_seen = 0
-        skipped_conf = 0
         skipped_date = 0
 
         for f in alerts:
@@ -138,29 +138,29 @@ def ingest_radd_alerts_gfw(db: Session):
                 props = f.get("properties", {})
 
                 alert_date = None
-                conf = 0
+                conf = 2  # default fallback
 
                 # =========================
-                # PRIORITY: 2026 FIRST
+                # PRIORITY: 2026 (STRICT)
                 # =========================
-                if props.get("alertDate26") and props.get("conf26"):
+                if props.get("alertDate26") is not None:
                     try:
                         days = int(props["alertDate26"])
                         if 1 <= days <= 366:
                             alert_date = datetime(2026, 1, 1) + timedelta(days=days - 1)
-                            conf = props.get("conf26")
+                            conf = props.get("conf26", 2)
                     except:
                         pass
 
                 # =========================
-                # FALLBACK: 2025
+                # FALLBACK: 2025 ONLY IF 2026 ABSENT
                 # =========================
-                elif props.get("alertDate25") and props.get("conf25"):
+                if alert_date is None and props.get("alertDate25") is not None:
                     try:
                         days = int(props["alertDate25"])
                         if 1 <= days <= 366:
                             alert_date = datetime(2025, 1, 1) + timedelta(days=days - 1)
-                            conf = props.get("conf25")
+                            conf = props.get("conf25", 2)
                     except:
                         pass
 
@@ -170,26 +170,13 @@ def ingest_radd_alerts_gfw(db: Session):
                 if alert_date is None:
                     skipped_date += 1
                     continue
-
-                # =========================
-                # FILTER NOISE
-                # =========================
-                if conf == 0:
-                    skipped_conf += 1
-                    continue
-
-                # =========================
-                # LOSS MODEL (CALIBRATED)
-                # =========================
-                loss_ha = 0.08
-
+                loss_ha = None
                 is_confirmed = str(int(conf)).startswith('3')
-                actual_confidence = 0.975 if is_confirmed else 0.85
+                actual_confidence = 0.98 if is_confirmed else 0.85
 
                 batch.append({
                     "id": str(uuid.uuid4()),
                     "date": alert_date,
-                    "loss": loss_ha,
                     "confidence": actual_confidence,
                     "lon": lon,
                     "lat": lat
@@ -198,27 +185,22 @@ def ingest_radd_alerts_gfw(db: Session):
             except Exception:
                 continue
 
-        # =========================
-        # DEBUG LOGGING
-        # =========================
         print(f"""
 📊 COUNTY SUMMARY: {county_name}
 TOTAL FEATURES: {total_seen}
-SKIPPED (CONF=0): {skipped_conf}
 SKIPPED (NO DATE): {skipped_date}
 TO INSERT: {len(batch)}
 """)
 
         if not batch:
-            print("⚠️ No new alerts to insert")
+            print("⚠️ No valid alerts to insert")
             continue
 
         db.execute(text("""
-            INSERT INTO radd_alerts (id, alert_date, loss_ha, confidence, geometry)
+            INSERT INTO radd_alerts (id, alert_date, confidence, geometry)
             VALUES (
                 :id,
                 :date,
-                :loss,
                 :confidence,
                 ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)
             )

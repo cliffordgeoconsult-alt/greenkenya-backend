@@ -2,14 +2,10 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
-
-def get_radd_loss_for_geometry(db: Session, geometry_geojson):
-    """
-    Returns total RADD loss (ha) inside a geometry
-    """
+def get_radd_alerts_count(db: Session, geometry_geojson):
 
     query = text("""
-        SELECT COALESCE(SUM(loss_ha), 0) as total_loss
+        SELECT COUNT(*) as alerts
         FROM radd_alerts
         WHERE ST_Intersects(
             geometry,

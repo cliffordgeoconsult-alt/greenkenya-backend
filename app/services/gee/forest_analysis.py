@@ -183,6 +183,29 @@ def build_yearly_loss(stats):
 
     return yearly
 
+def get_hansen_loss_tile(geometry, year):
+
+    hansen = ee.Image("UMD/hansen/global_forest_change_2024_v1_12")
+    lossyear = hansen.select("lossyear")
+
+    # Use your existing forest mask (IMPORTANT)
+    forest = get_reporting_forest_mask()
+
+    # isolate loss for that year
+    loss = lossyear.eq(year - 2000).And(forest)
+
+    # style (red loss)
+    vis = {
+        "palette": ["#ff0000"],
+        "min": 1,
+        "max": 1
+    }
+
+    # generate tile
+    map_id = loss.selfMask().visualize(**vis).getMapId()
+
+    return map_id["tile_fetcher"].url_format
+    
 def get_forest_gain_total(geometry):
 
     hansen = ee.Image("UMD/hansen/global_forest_change_2024_v1_12")
@@ -264,7 +287,7 @@ def calculate_yearly_coverage(geometry, start_year=2020, end_year=2026):
         tree_prob = get_dw_tree_probability(geometry, start_date, end_date)
         
         # Threshold: 0.5 probability counts as 'Forest Cover'
-        forest_mask = tree_prob.gt(0.5).selfMask()
+        forest_mask = tree_prob.gt(0.7).selfMask()
         
         stats = forest_mask.multiply(pixel_area).reduceRegion(
             reducer=ee.Reducer.sum(),
@@ -292,7 +315,10 @@ def calculate_degradation(geometry, start_year=2020, end_year=2025):
     
     # Degradation formula: (Baseline - Current) > 0.2
     # This captures thinning canopy, selective logging, or charcoal burning sites.
-    degradation_mask = baseline.subtract(current).gt(0.2).And(current.gt(0.1)).selfMask()
+    degradation_mask = baseline.subtract(current).gt(0.35) \
+        .And(current.gt(0.1)) \
+        .And(baseline.gt(0.5)) \
+        .selfMask()
     
     pixel_area = ee.Image.pixelArea()
     stats = degradation_mask.multiply(pixel_area).reduceRegion(
@@ -303,3 +329,51 @@ def calculate_degradation(geometry, start_year=2020, end_year=2025):
     ).getInfo()
 
     return round((stats.get('trees') or 0) / 10000, 2)
+
+def calculate_confirmed_deforestation(geometry, start_date, end_date):
+
+    # 1. Forest baseline (scientific)
+    forest = get_reporting_forest_mask()
+
+    # 2. RADD alerts (time-bound)
+    alerts = ee.ImageCollection("projects/glad/alert/UpdResult") \
+        .filterBounds(geometry) \
+        .filterDate(start_date, end_date)
+
+    # 3. Select correct band dynamically
+    def extract_conf(img):
+        bands = img.bandNames()
+        return ee.Image(
+            ee.Algorithms.If(
+                bands.contains("conf26"),
+                img.select("conf26"),
+                ee.Algorithms.If(
+                    bands.contains("conf25"),
+                    img.select("conf25"),
+                    ee.Image(0)
+                )
+            )
+        )
+
+    alert_img = alerts.map(extract_conf).max()
+
+    # 4. High confidence only
+    confirmed = alert_img.gte(2)
+
+    # 5. INTERSECTION (THIS IS THE MAGIC)
+    deforestation = confirmed.And(forest)
+
+    # 6. AREA
+    area = deforestation.multiply(ee.Image.pixelArea())
+
+    stats = area.reduceRegion(
+        reducer=ee.Reducer.sum(),
+        geometry=geometry,
+        scale=10,
+        maxPixels=1e13
+    ).getInfo()
+
+    return round(
+        (list(stats.values())[0] if stats else 0) / 10000,
+        2
+    )

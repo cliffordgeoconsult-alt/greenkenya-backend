@@ -15,18 +15,34 @@ from app.services.gee.forest_analysis import (
     get_dw_tree_probability,
     calculate_dw_transition,
     calculate_yearly_coverage,
-    calculate_degradation
+    calculate_degradation,
+    calculate_confirmed_deforestation
 )
 from app.services.admin_service import get_counties
 from app.services.admin_service import get_subcounties
 from app.services.admin_service import get_wards
 from app.services.radd_analytics_service import (
+    get_radd_daily,
     get_radd_yearly,
     get_radd_monthly_current_year
 )
-from app.services.radd_query_service import get_radd_loss_for_geometry
+from app.services.radd_query_service import get_radd_alerts_count
 from datetime import datetime, timedelta
 
+today = datetime.now().strftime('%Y-%m-%d')
+this_month_start = datetime.now().strftime('%Y-%m-01')
+
+def calculate_risk(loss_pct, alerts_total, recent_alerts):
+
+    if alerts_total > 10000 or recent_alerts > 500:
+        return "critical"
+    elif alerts_total > 2000 or recent_alerts > 100:
+        return "high"
+    elif alerts_total > 500:
+        return "medium"
+    else:
+        return "low"
+    
 def run_vegetation_analysis(db):
     initialize_ee()
 
@@ -43,10 +59,8 @@ def run_vegetation_analysis(db):
         ee_geom = ee.Geometry(geojson)
         
         # 1. RADD REAL-TIME LOSS
-        radd_loss_ha = get_radd_loss_for_geometry(
-            db,
-            json.dumps(geojson)
-        )
+        alerts_count = get_radd_alerts_count(db, json.dumps(geojson))
+        radd_daily = get_radd_daily(db, json.dumps(geojson))
         radd_yearly = get_radd_yearly(db, json.dumps(geojson))
         radd_monthly = get_radd_monthly_current_year(db, json.dumps(geojson))
 
@@ -99,15 +113,28 @@ def run_vegetation_analysis(db):
         # --- COMPUTE DEGRADATION ---
         degradation_ha = calculate_degradation(ee_geom, 2020, 2025)
 
-        # 6. RISK & ALERTS
-        alerts_count = sum([y.get("loss_ha", 0) for y in radd_yearly]) if radd_yearly else 0
+        # --- COMPUTE CONFIRMED DEFORESTATION ---
+        year_start = f"{datetime.now().year}-01-01"
 
-        if loss_pct > 30 or alerts_count > 20:
-            risk = "high"
-        elif loss_pct > 10 or alerts_count > 5:
-            risk = "medium"
-        else:
-            risk = "low"
+        confirmed_deforestation_ha = calculate_confirmed_deforestation(
+            ee_geom,
+            year_start,
+            today
+        )
+        month_start = datetime.now().strftime('%Y-%m-01')
+
+        confirmed_deforestation_month_ha = calculate_confirmed_deforestation(
+            ee_geom,
+            month_start,
+            today
+        )
+
+        # 6. RISK & ALERTS
+        alerts_total = sum([y["alerts"] for y in radd_yearly]) if radd_yearly else 0
+
+        recent_alerts = sum([d["alerts"] for d in radd_daily]) if radd_daily else 0
+
+        risk = calculate_risk(loss_pct, alerts_total, recent_alerts)
 
         # 7. ASSEMBLE RESULTS
         results.append({
@@ -133,10 +160,13 @@ def run_vegetation_analysis(db):
             "loss_pct": round(loss_pct, 2),
             
             # RADD (REAL-TIME)
-            "radd_loss_ha": round(radd_loss_ha, 2),
+            "radd_daily": radd_daily,
             "radd_yearly": radd_yearly,
             "radd_monthly": radd_monthly,
             "alerts": alerts_count,
+            "alerts_total": alerts_total,
+            "confirmed_deforestation_ha": confirmed_deforestation_ha,
+            "confirmed_deforestation_month_ha": confirmed_deforestation_month_ha,
             
             # STATUS
             "risk": risk,
@@ -176,15 +206,27 @@ def run_ward_vegetation_analysis(db):
         loss_pct = (total_loss_ha / baseline_ha * 100) if baseline_ha > 0 else 0
 
         # RADD REAL-TIME
-        radd_loss_ha = get_radd_loss_for_geometry(
-            db,
-            json.dumps(geojson)
-        )
-
+        alerts_count = get_radd_alerts_count(db, json.dumps(geojson))
+        radd_daily = get_radd_daily(db, json.dumps(geojson))
         radd_yearly = get_radd_yearly(db, json.dumps(geojson))
         radd_monthly = get_radd_monthly_current_year(db, json.dumps(geojson))
 
-        alerts_count = sum([y.get("loss_ha", 0) for y in radd_yearly]) if radd_yearly else 0
+        alerts_total = sum([y["alerts"] for y in radd_yearly]) if radd_yearly else 0
+
+        year_start = f"{datetime.now().year}-01-01"
+
+        confirmed_deforestation_ha = calculate_confirmed_deforestation(
+            ee_geom,
+            year_start,
+            today
+        )
+        month_start = datetime.now().strftime('%Y-%m-01')
+
+        confirmed_deforestation_month_ha = calculate_confirmed_deforestation(
+            ee_geom,
+            month_start,
+            today
+        )
 
         # GAIN
         gain_stats = get_forest_gain_total(ee_geom)
@@ -192,12 +234,9 @@ def run_ward_vegetation_analysis(db):
         gain_ha = round(gain_m2 / 10000, 2)
 
         # RISK
-        if loss_pct > 30 or alerts_count > 20:
-            risk = "high"
-        elif loss_pct > 10 or alerts_count > 5:
-            risk = "medium"
-        else:
-            risk = "low"
+        recent_alerts = sum([d["alerts"] for d in radd_daily]) if radd_daily else 0
+
+        risk = calculate_risk(loss_pct, alerts_total, recent_alerts)
 
         results.append({
             "ward": ward["name"],
@@ -214,10 +253,13 @@ def run_ward_vegetation_analysis(db):
             "loss_pct": round(loss_pct, 2),
 
             # RADD
-            "radd_loss_ha": round(radd_loss_ha, 2),
+            "radd_daily": radd_daily,
             "radd_yearly": radd_yearly,
             "radd_monthly": radd_monthly,
             "alerts": alerts_count,
+            "alerts_total": alerts_total,
+            "confirmed_deforestation_ha": confirmed_deforestation_ha,
+            "confirmed_deforestation_month_ha": confirmed_deforestation_month_ha,
 
             # STATUS
             "risk": risk
@@ -257,23 +299,32 @@ def run_subcounty_vegetation_analysis(db):
         loss_pct = (total_loss_ha / baseline_ha * 100) if baseline_ha > 0 else 0
 
         # RADD (REAL-TIME)
-        radd_loss_ha = get_radd_loss_for_geometry(
-            db,
-            json.dumps(geojson)
-        )
-
+        alerts_count = get_radd_alerts_count(db, json.dumps(geojson))
+        radd_daily = get_radd_daily(db, json.dumps(geojson))
         radd_yearly = get_radd_yearly(db, json.dumps(geojson))
         radd_monthly = get_radd_monthly_current_year(db, json.dumps(geojson))
 
-        alerts_count = sum([y.get("loss_ha", 0) for y in radd_yearly]) if radd_yearly else 0
+        alerts_total = sum([y["alerts"] for y in radd_yearly]) if radd_yearly else 0
+
+        year_start = f"{datetime.now().year}-01-01"
+
+        confirmed_deforestation_ha = calculate_confirmed_deforestation(
+            ee_geom,
+            year_start,
+            today
+        )
+        month_start = datetime.now().strftime('%Y-%m-01')
+
+        confirmed_deforestation_month_ha = calculate_confirmed_deforestation(
+            ee_geom,
+            month_start,
+            today
+        )
 
         # RISK
-        if loss_pct > 30 or alerts_count > 20:
-            risk = "high"
-        elif loss_pct > 10 or alerts_count > 5:
-            risk = "medium"
-        else:
-            risk = "low"
+        recent_alerts = sum([d["alerts"] for d in radd_daily]) if radd_daily else 0
+
+        risk = calculate_risk(loss_pct, alerts_total, recent_alerts)
 
         results.append({
             "subcounty": sub["name"],
@@ -289,10 +340,13 @@ def run_subcounty_vegetation_analysis(db):
             "loss_pct": round(loss_pct, 2),
 
             # RADD
-            "radd_loss_ha": round(radd_loss_ha, 2),
+            "radd_daily": radd_daily,
             "radd_yearly": radd_yearly,
             "radd_monthly": radd_monthly,
             "alerts": alerts_count,
+            "alerts_total": alerts_total,
+            "confirmed_deforestation_ha": confirmed_deforestation_ha,
+            "confirmed_deforestation_month_ha": confirmed_deforestation_month_ha,
 
             # STATUS
             "risk": risk
@@ -328,15 +382,28 @@ def run_national_vegetation_analysis(db):
     loss_pct = (total_loss_ha / baseline_ha * 100) if baseline_ha > 0 else 0
 
     # ⚡ RADD
-    radd_loss_ha = get_radd_loss_for_geometry(
-        db,
-        result.geojson
-    )
+    alerts_count = get_radd_alerts_count(db, result.geojson)
+    radd_daily = get_radd_daily(db, result.geojson)
 
     radd_yearly = get_radd_yearly(db, result.geojson)
     radd_monthly = get_radd_monthly_current_year(db, result.geojson)
 
-    alerts_count = sum([y.get("loss_ha", 0) for y in radd_yearly]) if radd_yearly else 0
+    alerts_total = sum([y["alerts"] for y in radd_yearly]) if radd_yearly else 0
+
+    year_start = f"{datetime.now().year}-01-01"
+
+    confirmed_deforestation_ha = calculate_confirmed_deforestation(
+        kenya_geom,
+        year_start,
+        today
+    )
+    month_start = datetime.now().strftime('%Y-%m-01')
+
+    confirmed_deforestation_month_ha = calculate_confirmed_deforestation(
+            kenya_geom,
+            month_start,
+            today
+        )
 
     # GAIN
     gain_stats = get_forest_gain_total(kenya_geom)
@@ -344,12 +411,8 @@ def run_national_vegetation_analysis(db):
     gain_ha = round(gain_m2 / 10000, 2)
 
     # RISK
-    if loss_pct > 30 or alerts_count > 20:
-        risk = "high"
-    elif loss_pct > 10 or alerts_count > 5:
-        risk = "medium"
-    else:
-        risk = "low"
+    recent_alerts = sum([d["alerts"] for d in radd_daily]) if radd_daily else 0
+    risk = calculate_risk(loss_pct, alerts_total, recent_alerts)
 
     result = {
         "country": "Kenya",
@@ -366,10 +429,13 @@ def run_national_vegetation_analysis(db):
         "loss_pct": round(loss_pct, 2),
 
         # RADD
-        "radd_loss_ha": round(radd_loss_ha, 2),
+        "radd_daily": radd_daily,
         "radd_yearly": radd_yearly,
         "radd_monthly": radd_monthly,
         "alerts": alerts_count,
+        "alerts_total": alerts_total,
+        "confirmed_deforestation_ha": confirmed_deforestation_ha,
+        "confirmed_deforestation_month_ha": confirmed_deforestation_month_ha,
 
         # STATUS
         "risk": risk
@@ -414,15 +480,28 @@ def run_reserve_loss_analysis(db):
         loss_pct = (total_loss_ha / baseline_ha * 100) if baseline_ha > 0 else 0
 
         # RADD
-        radd_loss_ha = get_radd_loss_for_geometry(
-            db,
-            json.dumps(geojson)
-        )
+        alerts_count = get_radd_alerts_count(db, json.dumps(geojson))
+        radd_daily = get_radd_daily(db, json.dumps(geojson))
 
         radd_yearly = get_radd_yearly(db, json.dumps(geojson))
         radd_monthly = get_radd_monthly_current_year(db, json.dumps(geojson))
 
-        alerts_count = sum([y.get("loss_ha", 0) for y in radd_yearly]) if radd_yearly else 0
+        alerts_total = sum([y["alerts"] for y in radd_yearly]) if radd_yearly else 0
+        # 
+        year_start = f"{datetime.now().year}-01-01"
+
+        confirmed_deforestation_ha = calculate_confirmed_deforestation(
+            ee_geom,
+            year_start,
+            today
+        )
+        month_start = datetime.now().strftime('%Y-%m-01')
+
+        confirmed_deforestation_month_ha = calculate_confirmed_deforestation(
+            ee_geom,
+            month_start,
+            today
+        )
 
         # GAIN
         gain_stats = get_forest_gain_total(ee_geom)
@@ -430,12 +509,9 @@ def run_reserve_loss_analysis(db):
         gain_ha = round(gain_m2 / 10000, 2)
 
         # RISK
-        if loss_pct > 30 or alerts_count > 20:
-            risk = "high"
-        elif loss_pct > 10 or alerts_count > 5:
-            risk = "medium"
-        else:
-            risk = "low"
+        recent_alerts = sum([d["alerts"] for d in radd_daily]) if radd_daily else 0
+
+        risk = calculate_risk(loss_pct, alerts_total, recent_alerts)
 
         results.append({
             "reserve_id": reserve_id,
@@ -450,10 +526,13 @@ def run_reserve_loss_analysis(db):
             "total_loss_ha": round(total_loss_ha, 2),
             "loss_pct": round(loss_pct, 2),
             # RADD
-            "radd_loss_ha": round(radd_loss_ha, 2),
+            "radd_daily": radd_daily,
             "radd_yearly": radd_yearly,
             "radd_monthly": radd_monthly,
             "alerts": alerts_count,
+            "alerts_total": alerts_total,
+            "confirmed_deforestation_ha": confirmed_deforestation_ha,
+            "confirmed_deforestation_month_ha": confirmed_deforestation_month_ha,
             # STATUS
             "risk": risk
         })
@@ -506,15 +585,27 @@ def run_non_reserve_forest_analysis(db):
         loss_pct = (total_loss_ha / baseline_ha * 100) if baseline_ha > 0 else 0
 
         # ⚡ RADD
-        radd_loss_ha = get_radd_loss_for_geometry(
-            db,
-            json.dumps(geojson)
-        )
-
+        alerts_count = get_radd_alerts_count(db, json.dumps(geojson))
+        radd_daily = get_radd_daily(db, json.dumps(geojson))
         radd_yearly = get_radd_yearly(db, json.dumps(geojson))
         radd_monthly = get_radd_monthly_current_year(db, json.dumps(geojson))
 
-        alerts_count = sum([y.get("loss_ha", 0) for y in radd_yearly]) if radd_yearly else 0
+        alerts_total = sum([y["alerts"] for y in radd_yearly]) if radd_yearly else 0
+
+        year_start = f"{datetime.now().year}-01-01"
+
+        confirmed_deforestation_ha = calculate_confirmed_deforestation(
+            ee_geom,
+            year_start,
+            today
+        )
+        month_start = datetime.now().strftime('%Y-%m-01')
+
+        confirmed_deforestation_month_ha = calculate_confirmed_deforestation(
+            ee_geom,
+            month_start,
+            today
+        )
 
         # GAIN
         gain_stats = get_forest_gain_total(ee_geom)
@@ -522,12 +613,9 @@ def run_non_reserve_forest_analysis(db):
         gain_ha = round(gain_m2 / 10000, 2)
 
         # RISK
-        if loss_pct > 30 or alerts_count > 20:
-            risk = "high"
-        elif loss_pct > 10 or alerts_count > 5:
-            risk = "medium"
-        else:
-            risk = "low"
+        recent_alerts = sum([d["alerts"] for d in radd_daily]) if radd_daily else 0
+
+        risk = calculate_risk(loss_pct, alerts_total, recent_alerts)
 
         results.append({
             "forest_id": forest_id,
@@ -543,10 +631,14 @@ def run_non_reserve_forest_analysis(db):
             "total_loss_ha": round(total_loss_ha, 2),
             "loss_pct": round(loss_pct, 2),
             # RADD
-            "radd_loss_ha": round(radd_loss_ha, 2),
+            "radd_daily": radd_daily,
             "radd_yearly": radd_yearly,
             "radd_monthly": radd_monthly,
             "alerts": alerts_count,
+            "alerts_total": alerts_total,
+            "confirmed_deforestation_ha": confirmed_deforestation_ha,
+            "confirmed_deforestation_month_ha": confirmed_deforestation_month_ha,
+
 
             # STATUS
             "risk": risk
@@ -598,15 +690,28 @@ def run_forest_intelligence(db):
         loss_pct = (total_loss / baseline_ha * 100) if baseline_ha > 0 else 0
 
         # RADD
-        radd_loss_ha = get_radd_loss_for_geometry(
-            db,
-            json.dumps(geojson)
-        )
+        alerts_count = get_radd_alerts_count(db, json.dumps(geojson))
+        radd_daily = get_radd_daily(db, json.dumps(geojson))
 
         radd_yearly = get_radd_yearly(db, json.dumps(geojson))
         radd_monthly = get_radd_monthly_current_year(db, json.dumps(geojson))
 
-        alerts_count = sum([y.get("loss_ha", 0) for y in radd_yearly]) if radd_yearly else 0
+        alerts_total = sum([y["alerts"] for y in radd_yearly]) if radd_yearly else 0
+
+        year_start = f"{datetime.now().year}-01-01"
+
+        confirmed_deforestation_ha = calculate_confirmed_deforestation(
+            ee_geom,
+            year_start,
+            today
+        )
+        month_start = datetime.now().strftime('%Y-%m-01')
+
+        confirmed_deforestation_month_ha = calculate_confirmed_deforestation(
+            ee_geom,
+            month_start,
+            today
+        )
 
         # PROTECTION CHECK
         reserve = db.execute(text("""
@@ -628,12 +733,9 @@ def run_forest_intelligence(db):
         gain_ha = round(gain_m2 / 10000, 2)
 
         # RISK LOGIC
-        if loss_pct > 30 or alerts_count > 20:
-            risk = "high"
-        elif loss_pct > 10 or alerts_count > 5:
-            risk = "medium"
-        else:
-            risk = "low"
+        recent_alerts = sum([d["alerts"] for d in radd_daily]) if radd_daily else 0
+
+        risk = calculate_risk(loss_pct, alerts_total, recent_alerts)
 
         results.append({
             "forest_id": forest_id,
@@ -652,10 +754,13 @@ def run_forest_intelligence(db):
             "total_loss_ha": round(total_loss, 2),
             "loss_pct": round(loss_pct, 2),
             # RADD
-            "radd_loss_ha": round(radd_loss_ha, 2),
+            "radd_daily": radd_daily,
             "radd_yearly": radd_yearly,
             "radd_monthly": radd_monthly,
             "alerts": alerts_count,
+            "alerts_total": alerts_total,
+            "confirmed_deforestation_ha": confirmed_deforestation_ha,
+            "confirmed_deforestation_month_ha": confirmed_deforestation_month_ha,
             # STATUS
             "risk": risk
         })

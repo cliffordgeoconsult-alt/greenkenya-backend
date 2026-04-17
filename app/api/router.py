@@ -1,6 +1,6 @@
 # app/api/router.py
 from fastapi import APIRouter
-from app.api.endpoints import counties, subcounties, wards, forests, reports
+from app.api.endpoints import counties, subcounties, wards, forests, reports, waste
 
 api_router = APIRouter()
 
@@ -30,4 +30,9 @@ api_router.include_router(
     reports.router, 
     prefix="/reports", 
     tags=["Reports"]
+)
+api_router.include_router(
+    waste.router,
+    prefix="/wastes",
+    tags=["Waste"]
 )

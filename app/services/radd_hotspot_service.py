@@ -9,21 +9,21 @@
 from sqlalchemy import text
 import json
 
-def generate_radd_hotspots(db, days=90):
+def generate_radd_hotspots(db, days=3650):
 
     hotspots = db.execute(text("""
         WITH filtered AS (
             SELECT *
             FROM radd_alerts
-            WHERE alert_date >= NOW() - (:days || ' days')::interval
+            WHERE alert_date >= NOW() - INTERVAL '30 days'
         ),
 
         clustered AS (
             SELECT
                 ST_ClusterDBSCAN(
                     geometry,
-                    eps := 0.05,
-                    minpoints := 3
+                    eps := 0.02,
+                    minpoints := 5
                 ) OVER () AS cluster_id,
                 geometry,
                 loss_ha,
@@ -35,7 +35,6 @@ def generate_radd_hotspots(db, days=90):
             SELECT
                 cluster_id,
                 COUNT(*) AS alerts_count,
-                SUM(loss_ha) AS total_loss,
                 MIN(alert_date) AS start_date,
                 MAX(alert_date) AS end_date,
                 ST_Envelope(ST_Collect(geometry)) AS geom
@@ -47,7 +46,6 @@ def generate_radd_hotspots(db, days=90):
         SELECT
             c.cluster_id,
             c.alerts_count,
-            c.total_loss,
             c.start_date,
             c.end_date,
             ST_AsGeoJSON(c.geom) AS geometry,
@@ -102,7 +100,6 @@ def generate_radd_hotspots(db, days=90):
         results.append({
             "cluster_id": int(h[0]),
             "alerts_count": int(h[1]),
-            "total_loss_ha": round(h[2] or 0, 2),
             "severity": severity,
             "start_date": str(h[3]),
             "end_date": str(h[4]),
