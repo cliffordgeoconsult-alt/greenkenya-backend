@@ -183,11 +183,17 @@ def run_vegetation_analysis(db, level=None, entity_id=None):
     save_intelligence(db, results, "county")
     return results
 
-def run_ward_vegetation_analysis(db):
-
+def run_ward_vegetation_analysis(db, entity_id=None):
     initialize_ee()
 
-    wards = get_wards(db)[:20]  # keep limit
+    if entity_id:
+        wards = get_wards(db)
+        wards = [w for w in wards if str(w["id"]) == str(entity_id)]
+
+        if not wards:
+            return {"error": "Ward not found"}
+    else:
+        wards = get_wards(db)
 
     results = []
 
@@ -247,6 +253,7 @@ def run_ward_vegetation_analysis(db):
 
         results.append({
             "ward": ward["name"],
+            "ward_id": ward["id"],
 
             # BASELINE
             "canopy_30_ha": round(tree30 / 10000, 2),
@@ -274,13 +281,20 @@ def run_ward_vegetation_analysis(db):
 
     save_intelligence(db, results, "ward")
 
-    return results
+    if entity_id:
+        return results[0] if results else {}
 
-def run_subcounty_vegetation_analysis(db):
-
+def run_subcounty_vegetation_analysis(db, entity_id=None):
     initialize_ee()
 
-    subcounties = get_subcounties(db)[:10]  # increase later
+    if entity_id:
+        subcounties = get_subcounties(db)
+        subcounties = [s for s in subcounties if str(s["id"]) == str(entity_id)]
+
+        if not subcounties:
+            return {"error": "Subcounty not found"}
+    else:
+        subcounties = get_subcounties(db)
 
     results = []
 
@@ -335,6 +349,7 @@ def run_subcounty_vegetation_analysis(db):
 
         results.append({
             "subcounty": sub["name"],
+            "subcounty_id": sub["id"],
 
             # BASELINE
             "canopy_30_ha": round(tree30 / 10000, 2),
@@ -359,7 +374,8 @@ def run_subcounty_vegetation_analysis(db):
             "risk": risk
         })
     save_intelligence(db, results, "subcounty")
-    return results
+    if entity_id:
+        return results[0] if results else {}
 
 def run_national_vegetation_analysis(db):
 
@@ -785,8 +801,8 @@ def save_intelligence(db, results, level):
             r.get("forest_id")
             or r.get("reserve_id")
             or r.get("county_id")
-            or r.get("ward")
-            or r.get("subcounty")
+            or r.get("ward_id")
+            or r.get("subcounty_id")
         )
 
         entity_id = str(entity_id) if entity_id is not None else None

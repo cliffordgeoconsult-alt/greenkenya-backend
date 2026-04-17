@@ -38,14 +38,18 @@ def forest_analysis(
     return run_vegetation_analysis(db, level, entity_id)
 
 @router.get("/forest-analysis/wards")
-def ward_forest_analysis(db: Session = Depends(get_db)):
-    return run_ward_vegetation_analysis(db)
-
+def ward_forest_analysis(
+    entity_id: str = None,
+    db: Session = Depends(get_db)
+):
+    return run_ward_vegetation_analysis(db, entity_id)
 
 @router.get("/forest-analysis/subcounties")
-def subcounty_forest_analysis(db: Session = Depends(get_db)):
-    return run_subcounty_vegetation_analysis(db)
-
+def subcounty_forest_analysis(
+    entity_id: str = None,
+    db: Session = Depends(get_db)
+):
+    return run_subcounty_vegetation_analysis(db, entity_id)
 
 @router.get("/forest-analysis/national")
 def national_forest_analysis(db: Session = Depends(get_db)):
