@@ -58,3 +58,7 @@ id_ed25519
 
 # sensitive files
 service-account.json
+
+# sql
+full_dump.sql
+admin_dump.sql
