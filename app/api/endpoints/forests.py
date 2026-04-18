@@ -131,7 +131,6 @@ def get_reserves(db: Session = Depends(get_db)):
             name,
             ST_AsGeoJSON(geometry)
         FROM forest_reserves
-        LIMIT 200
     """)).fetchall()
 
     features = []
