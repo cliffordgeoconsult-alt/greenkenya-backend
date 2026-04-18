@@ -123,8 +123,36 @@ def get_hotspots(days: int = 90, db: Session = Depends(get_db)):
     return generate_radd_hotspots(db, days)
 
 @router.get("/reserves")
-def get_reserves(db: Session = Depends(get_db)):
+def get_reserves(
+    reserve_id: str = None,
+    db: Session = Depends(get_db)
+):
+    import json
 
+    # SINGLE RESERVE
+    if reserve_id:
+        reserve = db.execute(text("""
+            SELECT 
+                reserve_id,
+                name,
+                ST_AsGeoJSON(geometry)
+            FROM forest_reserves
+            WHERE reserve_id = :rid
+        """), {"rid": reserve_id}).fetchone()
+
+        if not reserve:
+            return {"error": "Reserve not found"}
+
+        return {
+            "type": "Feature",
+            "geometry": json.loads(reserve[2]),
+            "properties": {
+                "reserve_id": reserve[0],
+                "name": reserve[1]
+            }
+        }
+
+    # ALL RESERVES
     reserves = db.execute(text("""
         SELECT 
             reserve_id,
