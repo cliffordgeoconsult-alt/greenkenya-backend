@@ -180,12 +180,9 @@ def run_vegetation_analysis(db, level=None, entity_id=None):
             "risk": risk,
             "confidence": "high"
         })
-
+    
     save_intelligence(db, results, "county")
-
-    return {
-        "data": results,
-    }
+    return results
 
 def run_ward_vegetation_analysis(db, entity_id=None):
     initialize_ee()
@@ -322,16 +319,9 @@ def run_ward_vegetation_analysis(db, entity_id=None):
         })
 
     save_intelligence(db, results, "ward")
-
-    # AI INTERPRETATION
     if entity_id:
-        return {
-            "data": results[0] if results else {},
-        }
-
-    return {
-        "data": results,
-    }
+        return results[0] if results else {}
+    
 def run_subcounty_vegetation_analysis(db, entity_id=None):
     initialize_ee()
 
@@ -461,16 +451,8 @@ def run_subcounty_vegetation_analysis(db, entity_id=None):
         })
     save_intelligence(db, results, "subcounty")
 
-    # AI INTERPRETATION
-    
     if entity_id:
-        return {
-            "data": results[0] if results else {},
-        }
-
-    return {
-        "data": results,
-    }
+        return results[0] if results else {}
 
 def run_national_vegetation_analysis(db):
 
