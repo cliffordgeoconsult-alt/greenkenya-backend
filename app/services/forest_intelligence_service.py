@@ -218,6 +218,32 @@ def run_ward_vegetation_analysis(db, entity_id=None):
         baseline_ha = round(forest_m2 / 10000, 2)
         loss_pct = (total_loss_ha / baseline_ha * 100) if baseline_ha > 0 else 0
 
+        # Long-term Transition (2020 - 2026 monitoring)
+        # Note: 2026 DW data is pulled dynamically as it becomes available
+        dw_transitions = calculate_dw_transition(ee_geom, 2020, 2025)
+        regrowth_ha = dw_transitions.get("regrowth_ha", 0)
+
+        # Monthly Auto-Update: Calculate current month vitality
+        current_vitality_img = get_dw_tree_probability(ee_geom, this_month_start, today)
+        vitality_stats = current_vitality_img.reduceRegion(
+            reducer=ee.Reducer.mean(),
+            geometry=ee_geom,
+            scale=30,  # Scaled for performance
+            maxPixels=1e13
+        ).getInfo()
+        
+        # Convert 0-1 probability to a percentage 0-100
+        current_vitality_pct = round((vitality_stats.get('trees', 0) * 100), 2)
+        
+        # --- NEW: YEARLY COVERAGE ---
+        yearly_coverage = calculate_yearly_coverage(ee_geom, 2020, 2026)
+        
+        # Get the latest coverage (2026) for quick display
+        latest_coverage_ha = yearly_coverage[-1]["forest_extent_ha"]
+
+        # --- COMPUTE DEGRADATION ---
+        degradation_ha = calculate_degradation(ee_geom, 2020, 2025)
+
         # RADD REAL-TIME
         alerts_count = get_radd_alerts_count(db, json.dumps(geojson))
         radd_daily = get_radd_daily(db, json.dumps(geojson))
@@ -265,6 +291,14 @@ def run_ward_vegetation_analysis(db, entity_id=None):
             "yearly_forest": yearly_data,
             "total_loss_ha": round(total_loss_ha, 2),
             "loss_pct": round(loss_pct, 2),
+
+            # DYNAMIC WORLD (NEW MV FEATURES)
+            "regrowth_ha": regrowth_ha, 
+            "vitality_pct": current_vitality_pct,
+            "degradation_ha": degradation_ha,
+            "monitoring_month": this_month_start,
+            "latest_coverage_ha": latest_coverage_ha,
+            "yearly_coverage": yearly_coverage,
 
             # RADD
             "radd_daily": radd_daily,
@@ -319,6 +353,32 @@ def run_subcounty_vegetation_analysis(db, entity_id=None):
         baseline_ha = round(forest_m2 / 10000, 2)
         loss_pct = (total_loss_ha / baseline_ha * 100) if baseline_ha > 0 else 0
 
+        # Long-term Transition (2020 - 2026 monitoring)
+        # Note: 2026 DW data is pulled dynamically as it becomes available
+        dw_transitions = calculate_dw_transition(ee_geom, 2020, 2025)
+        regrowth_ha = dw_transitions.get("regrowth_ha", 0)
+
+        # Monthly Auto-Update: Calculate current month vitality
+        current_vitality_img = get_dw_tree_probability(ee_geom, this_month_start, today)
+        vitality_stats = current_vitality_img.reduceRegion(
+            reducer=ee.Reducer.mean(),
+            geometry=ee_geom,
+            scale=30,  # Scaled for performance
+            maxPixels=1e13
+        ).getInfo()
+        
+        # Convert 0-1 probability to a percentage 0-100
+        current_vitality_pct = round((vitality_stats.get('trees', 0) * 100), 2)
+        
+        # --- NEW: YEARLY COVERAGE ---
+        yearly_coverage = calculate_yearly_coverage(ee_geom, 2020, 2026)
+        
+        # Get the latest coverage (2026) for quick display
+        latest_coverage_ha = yearly_coverage[-1]["forest_extent_ha"]
+
+        # --- COMPUTE DEGRADATION ---
+        degradation_ha = calculate_degradation(ee_geom, 2020, 2025)
+
         # RADD (REAL-TIME)
         alerts_count = get_radd_alerts_count(db, json.dumps(geojson))
         radd_daily = get_radd_daily(db, json.dumps(geojson))
@@ -360,6 +420,14 @@ def run_subcounty_vegetation_analysis(db, entity_id=None):
             "yearly_forest": yearly_data,
             "total_loss_ha": round(total_loss_ha, 2),
             "loss_pct": round(loss_pct, 2),
+
+            # DYNAMIC WORLD (NEW MV FEATURES)
+            "regrowth_ha": regrowth_ha, 
+            "vitality_pct": current_vitality_pct,
+            "degradation_ha": degradation_ha,
+            "monitoring_month": this_month_start,
+            "latest_coverage_ha": latest_coverage_ha,
+            "yearly_coverage": yearly_coverage,
 
             # RADD
             "radd_daily": radd_daily,
@@ -404,6 +472,31 @@ def run_national_vegetation_analysis(db):
     baseline_ha = round(forest_m2 / 10000, 2)
     loss_pct = (total_loss_ha / baseline_ha * 100) if baseline_ha > 0 else 0
 
+    # Long-term Transition (2020 - 2026 monitoring)
+    # Note: 2026 DW data is pulled dynamically as it becomes available
+    dw_transitions = calculate_dw_transition(kenya_geom, 2020, 2025)
+    regrowth_ha = dw_transitions.get("regrowth_ha", 0)
+
+    # Monthly Auto-Update: Calculate current month vitality
+    current_vitality_img = get_dw_tree_probability(kenya_geom, this_month_start, today)
+    vitality_stats = current_vitality_img.reduceRegion(
+        reducer=ee.Reducer.mean(),
+        geometry=kenya_geom,
+        scale=30,  # Scaled for performance
+        maxPixels=1e13
+    ).getInfo()
+        
+        # Convert 0-1 probability to a percentage 0-100
+    current_vitality_pct = round((vitality_stats.get('trees', 0) * 100), 2)
+        
+    # --- NEW: YEARLY COVERAGE ---
+    yearly_coverage = calculate_yearly_coverage(kenya_geom, 2020, 2026)
+        
+        # Get the latest coverage (2026) for quick display
+    latest_coverage_ha = yearly_coverage[-1]["forest_extent_ha"]
+
+     # --- COMPUTE DEGRADATION ---
+    degradation_ha = calculate_degradation(kenya_geom, 2020, 2025)
     # ⚡ RADD
     alerts_count = get_radd_alerts_count(db, result.geojson)
     radd_daily = get_radd_daily(db, result.geojson)
@@ -450,6 +543,14 @@ def run_national_vegetation_analysis(db):
         "yearly_forest": yearly_data,
         "total_loss_ha": round(total_loss_ha, 2),
         "loss_pct": round(loss_pct, 2),
+
+        # DYNAMIC WORLD (NEW MV FEATURES)
+            "regrowth_ha": regrowth_ha, 
+            "vitality_pct": current_vitality_pct,
+            "degradation_ha": degradation_ha,
+            "monitoring_month": this_month_start,
+            "latest_coverage_ha": latest_coverage_ha,
+            "yearly_coverage": yearly_coverage,
 
         # RADD
         "radd_daily": radd_daily,
@@ -502,6 +603,32 @@ def run_reserve_loss_analysis(db):
         baseline_ha = round(forest_m2 / 10000, 2)
         loss_pct = (total_loss_ha / baseline_ha * 100) if baseline_ha > 0 else 0
 
+        # Long-term Transition (2020 - 2026 monitoring)
+        # Note: 2026 DW data is pulled dynamically as it becomes available
+        dw_transitions = calculate_dw_transition(ee_geom, 2020, 2025)
+        regrowth_ha = dw_transitions.get("regrowth_ha", 0)
+
+        # Monthly Auto-Update: Calculate current month vitality
+        current_vitality_img = get_dw_tree_probability(ee_geom, this_month_start, today)
+        vitality_stats = current_vitality_img.reduceRegion(
+            reducer=ee.Reducer.mean(),
+            geometry=ee_geom,
+            scale=30,  # Scaled for performance
+            maxPixels=1e13
+        ).getInfo()
+        
+        # Convert 0-1 probability to a percentage 0-100
+        current_vitality_pct = round((vitality_stats.get('trees', 0) * 100), 2)
+        
+        # --- NEW: YEARLY COVERAGE ---
+        yearly_coverage = calculate_yearly_coverage(ee_geom, 2020, 2026)
+        
+        # Get the latest coverage (2026) for quick display
+        latest_coverage_ha = yearly_coverage[-1]["forest_extent_ha"]
+
+        # --- COMPUTE DEGRADATION ---
+        degradation_ha = calculate_degradation(ee_geom, 2020, 2025)
+
         # RADD
         alerts_count = get_radd_alerts_count(db, json.dumps(geojson))
         radd_daily = get_radd_daily(db, json.dumps(geojson))
@@ -548,6 +675,15 @@ def run_reserve_loss_analysis(db):
             "yearly_forest": yearly_data,
             "total_loss_ha": round(total_loss_ha, 2),
             "loss_pct": round(loss_pct, 2),
+
+            # DYNAMIC WORLD (NEW MV FEATURES)
+            "regrowth_ha": regrowth_ha, 
+            "vitality_pct": current_vitality_pct,
+            "degradation_ha": degradation_ha,
+            "monitoring_month": this_month_start,
+            "latest_coverage_ha": latest_coverage_ha,
+            "yearly_coverage": yearly_coverage,
+
             # RADD
             "radd_daily": radd_daily,
             "radd_yearly": radd_yearly,
@@ -712,6 +848,32 @@ def run_forest_intelligence(db):
         total_loss = yearly[-1]["loss_total_ha"] if yearly else 0
         loss_pct = (total_loss / baseline_ha * 100) if baseline_ha > 0 else 0
 
+        # Long-term Transition (2020 - 2026 monitoring)
+        # Note: 2026 DW data is pulled dynamically as it becomes available
+        dw_transitions = calculate_dw_transition(ee_geom, 2020, 2025)
+        regrowth_ha = dw_transitions.get("regrowth_ha", 0)
+
+        # Monthly Auto-Update: Calculate current month vitality
+        current_vitality_img = get_dw_tree_probability(ee_geom, this_month_start, today)
+        vitality_stats = current_vitality_img.reduceRegion(
+            reducer=ee.Reducer.mean(),
+            geometry=ee_geom,
+            scale=30,  # Scaled for performance
+            maxPixels=1e13
+        ).getInfo()
+        
+        # Convert 0-1 probability to a percentage 0-100
+        current_vitality_pct = round((vitality_stats.get('trees', 0) * 100), 2)
+        
+        # --- NEW: YEARLY COVERAGE ---
+        yearly_coverage = calculate_yearly_coverage(ee_geom, 2020, 2026)
+        
+        # Get the latest coverage (2026) for quick display
+        latest_coverage_ha = yearly_coverage[-1]["forest_extent_ha"]
+
+        # --- COMPUTE DEGRADATION ---
+        degradation_ha = calculate_degradation(ee_geom, 2020, 2025)
+
         # RADD
         alerts_count = get_radd_alerts_count(db, json.dumps(geojson))
         radd_daily = get_radd_daily(db, json.dumps(geojson))
@@ -776,6 +938,15 @@ def run_forest_intelligence(db):
             "yearly_forest": yearly,
             "total_loss_ha": round(total_loss, 2),
             "loss_pct": round(loss_pct, 2),
+
+            # DYNAMIC WORLD (NEW MV FEATURES)
+            "regrowth_ha": regrowth_ha, 
+            "vitality_pct": current_vitality_pct,
+            "degradation_ha": degradation_ha,
+            "monitoring_month": this_month_start,
+            "latest_coverage_ha": latest_coverage_ha,
+            "yearly_coverage": yearly_coverage,
+
             # RADD
             "radd_daily": radd_daily,
             "radd_yearly": radd_yearly,
