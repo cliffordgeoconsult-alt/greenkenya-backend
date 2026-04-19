@@ -182,10 +182,9 @@ def run_vegetation_analysis(db, level=None, entity_id=None):
         })
 
     save_intelligence(db, results, "county")
-    ai_output = generate_ai_insight("forest", results)
+
     return {
         "data": results,
-        "ai_insight": ai_output
     }
 
 def run_ward_vegetation_analysis(db, entity_id=None):
@@ -325,17 +324,13 @@ def run_ward_vegetation_analysis(db, entity_id=None):
     save_intelligence(db, results, "ward")
 
     # AI INTERPRETATION
-    ai_output = generate_ai_insight("forest", results)
-
     if entity_id:
         return {
             "data": results[0] if results else {},
-            "ai_insight": ai_output
         }
 
     return {
         "data": results,
-        "ai_insight": ai_output
     }
 def run_subcounty_vegetation_analysis(db, entity_id=None):
     initialize_ee()
@@ -467,17 +462,14 @@ def run_subcounty_vegetation_analysis(db, entity_id=None):
     save_intelligence(db, results, "subcounty")
 
     # AI INTERPRETATION
-    ai_output = generate_ai_insight("forest", results)
-
+    
     if entity_id:
         return {
             "data": results[0] if results else {},
-            "ai_insight": ai_output
         }
 
     return {
         "data": results,
-        "ai_insight": ai_output
     }
 
 def run_national_vegetation_analysis(db):
