@@ -27,6 +27,7 @@ from app.services.radd_analytics_service import (
     get_radd_monthly_current_year
 )
 from app.services.radd_query_service import get_radd_alerts_count
+from app.services.ai_service import generate_ai_insight
 from datetime import datetime, timedelta
 
 today = datetime.now().strftime('%Y-%m-%d')
@@ -181,7 +182,11 @@ def run_vegetation_analysis(db, level=None, entity_id=None):
         })
 
     save_intelligence(db, results, "county")
-    return results
+    ai_output = generate_ai_insight("forest", results)
+    return {
+        "data": results,
+        "ai_insight": ai_output
+    }
 
 def run_ward_vegetation_analysis(db, entity_id=None):
     initialize_ee()
@@ -196,6 +201,10 @@ def run_ward_vegetation_analysis(db, entity_id=None):
         wards = get_wards(db)
 
     results = []
+
+    now = datetime.now()
+    this_month_start = now.strftime('%Y-%m-01')
+    today = now.strftime('%Y-%m-%d')
 
     for ward in wards:
 
@@ -315,9 +324,19 @@ def run_ward_vegetation_analysis(db, entity_id=None):
 
     save_intelligence(db, results, "ward")
 
-    if entity_id:
-        return results[0] if results else {}
+    # AI INTERPRETATION
+    ai_output = generate_ai_insight("forest", results)
 
+    if entity_id:
+        return {
+            "data": results[0] if results else {},
+            "ai_insight": ai_output
+        }
+
+    return {
+        "data": results,
+        "ai_insight": ai_output
+    }
 def run_subcounty_vegetation_analysis(db, entity_id=None):
     initialize_ee()
 
@@ -331,6 +350,10 @@ def run_subcounty_vegetation_analysis(db, entity_id=None):
         subcounties = get_subcounties(db)
 
     results = []
+
+    now = datetime.now()
+    this_month_start = now.strftime('%Y-%m-01')
+    today = now.strftime('%Y-%m-%d')
 
     for sub in subcounties:
 
@@ -442,8 +465,20 @@ def run_subcounty_vegetation_analysis(db, entity_id=None):
             "risk": risk
         })
     save_intelligence(db, results, "subcounty")
+
+    # AI INTERPRETATION
+    ai_output = generate_ai_insight("forest", results)
+
     if entity_id:
-        return results[0] if results else {}
+        return {
+            "data": results[0] if results else {},
+            "ai_insight": ai_output
+        }
+
+    return {
+        "data": results,
+        "ai_insight": ai_output
+    }
 
 def run_national_vegetation_analysis(db):
 
