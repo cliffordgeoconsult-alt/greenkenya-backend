@@ -15,7 +15,7 @@ from app.services.forest_intelligence_service import (
     run_non_reserve_forest_analysis,
     run_forest_intelligence
 )
-from app.services.gee.forest_analysis import get_hansen_loss_tile
+from app.services.gee.forest_analysis import get_hansen_loss_tile, get_dw_coverage_tile
 from app.services.admin_service import get_counties, get_subcounties, get_wards
 from app.services.forest_registry_service import generate_forest_registry
 from app.services.radd_gfw_service import ingest_radd_alerts_gfw
@@ -211,6 +211,42 @@ def get_deforestation_tile(
 
     # get tile
     tile_url = get_hansen_loss_tile(ee_geom, year)
+
+    return {
+        "year": year,
+        "tile_url": tile_url
+    }
+
+@router.get("/forest-coverage-tile")
+def get_forest_coverage_tile(
+    level: str,
+    entity_id: str,
+    year: int,
+    db: Session = Depends(get_db)
+):
+
+    from app.services.gee.ee_init import initialize_ee
+    initialize_ee()
+
+    # GET ENTITY GEOMETRY
+    if level == "county":
+        entities = get_counties(db)
+    elif level == "subcounty":
+        entities = get_subcounties(db)
+    elif level == "ward":
+        entities = get_wards(db)
+    else:
+        return {"error": "Invalid level"}
+
+    entity = next((e for e in entities if str(e["id"]) == entity_id), None)
+
+    if not entity:
+        return {"error": "Entity not found"}
+
+    geojson = json.loads(entity["geometry"])
+    ee_geom = ee.Geometry(geojson)
+
+    tile_url = get_dw_coverage_tile(ee_geom, year)
 
     return {
         "year": year,

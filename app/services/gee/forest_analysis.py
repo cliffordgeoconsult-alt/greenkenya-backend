@@ -192,7 +192,7 @@ def get_hansen_loss_tile(geometry, year):
     forest = get_reporting_forest_mask()
 
     # isolate loss for that year
-    loss = lossyear.eq(year - 2000).And(forest)
+    loss = lossyear.eq(year - 2000).And(forest).clip(geometry)
 
     # style (red loss)
     vis = {
@@ -205,7 +205,43 @@ def get_hansen_loss_tile(geometry, year):
     map_id = loss.selfMask().visualize(**vis).getMapId()
 
     return map_id["tile_fetcher"].url_format
-    
+
+def get_dw_coverage_tile(geometry, year):
+
+    # 1. TIME WINDOW
+    start_date = f"{year}-01-01"
+    end_date = f"{year}-12-31"
+
+    # Handle current year (LIVE UPDATE)
+    if year == datetime.now().year:
+        end_date = datetime.now().strftime('%Y-%m-%d')
+
+    # 2. GET DYNAMIC WORLD
+    dw = ee.ImageCollection("GOOGLE/DYNAMICWORLD/V1") \
+        .filterBounds(geometry) \
+        .filterDate(start_date, end_date) \
+        .select("trees")
+
+    # Smooth (IMPORTANT → avoids flicker)
+    tree_prob = dw.mean().clip(geometry)
+
+    # 3. FOREST THRESHOLD (same as analytics)
+    forest = tree_prob.gt(0.7)
+
+    # 4. VISUALIZATION (clean green forest)
+    vis = {
+        "min": 0,
+        "max": 1,
+        "palette": [
+            "#000000",   # non forest
+            "#00ff00"    # forest (bright green)
+        ]
+    }
+
+    map_id = forest.selfMask().visualize(**vis).getMapId()
+
+    return map_id["tile_fetcher"].url_format
+
 def get_forest_gain_total(geometry):
 
     hansen = ee.Image("UMD/hansen/global_forest_change_2024_v1_12")
