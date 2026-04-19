@@ -41,7 +41,7 @@ Return STRICT JSON:
 
     try:
         response = client.chat.completions.create(
-            model="gpt-5.3",
+            model="gpt-4.1-mini",
             temperature=0.3,
             messages=[{"role": "user", "content": prompt}]
         )
