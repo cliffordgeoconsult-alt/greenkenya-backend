@@ -345,11 +345,15 @@ def get_national_carbon_map(year):
 
     forest = tree_prob.gte(0.3)
 
-    carbon = biomass.updateMask(forest)
+    carbon = (
+        biomass
+        .focal_mean(radius=1500, units="meters")
+        .updateMask(forest)
+    )
 
     vis = {
-        "min": 0,
-        "max": 150,
+        "min": 5,
+        "max": 80,
         "palette": [
             "#ffffcc",
             "#a1dab4",
