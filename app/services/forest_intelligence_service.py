@@ -16,7 +16,8 @@ from app.services.gee.forest_analysis import (
     calculate_dw_transition,
     calculate_yearly_coverage,
     calculate_degradation,
-    calculate_confirmed_deforestation
+    calculate_confirmed_deforestation,
+    select_stable_coverage_years
 )
 from app.services.admin_service import get_counties
 from app.services.admin_service import get_subcounties
@@ -102,10 +103,14 @@ def run_vegetation_analysis(db, level=None, entity_id=None):
 
         # Monthly Auto-Update: Calculate current month vitality
         current_vitality_img = get_dw_tree_probability(ee_geom, this_month_start, today)
-        vitality_stats = current_vitality_img.reduceRegion(
+        masked = current_vitality_img.updateMask(
+            current_vitality_img.gte(0.35)
+        )
+
+        vitality_stats = masked.reduceRegion(
             reducer=ee.Reducer.mean(),
             geometry=ee_geom,
-            scale=30,  # Scaled for performance
+            scale=10,
             maxPixels=1e13
         ).getInfo()
         
@@ -113,10 +118,18 @@ def run_vegetation_analysis(db, level=None, entity_id=None):
         current_vitality_pct = round((vitality_stats.get('trees', 0) * 100), 2)
         
         # --- NEW: YEARLY COVERAGE ---
-        yearly_coverage = calculate_yearly_coverage(ee_geom, 2020, 2026)
-        
-        # Get the latest coverage (2026) for quick display
-        latest_coverage_ha = yearly_coverage[-1]["forest_extent_ha"]
+        yearly_coverage = calculate_yearly_coverage(
+            ee_geom,
+            county["name"],
+            2017,
+            2026
+        )
+
+        stable_coverage = select_stable_coverage_years(yearly_coverage)
+
+        valid = [x for x in stable_coverage if x["forest_extent_ha"] is not None]
+
+        latest_coverage_ha = valid[-1]["forest_extent_ha"] if valid else None
 
         # --- COMPUTE DEGRADATION ---
         degradation_ha = calculate_degradation(ee_geom, 2020, 2025)
@@ -160,7 +173,8 @@ def run_vegetation_analysis(db, level=None, entity_id=None):
             "degradation_ha": degradation_ha,
             "monitoring_month": this_month_start,
             "latest_coverage_ha": latest_coverage_ha,
-            "yearly_coverage": yearly_coverage,
+            "coverage_benchmark_years": stable_coverage,
+            "coverage_note": "Approximate satellite-derived estimate",
 
             # HISTORICAL LOSS
             "yearly_forest": yearly_data,
@@ -178,7 +192,7 @@ def run_vegetation_analysis(db, level=None, entity_id=None):
             
             # STATUS
             "risk": risk,
-            "confidence": "high"
+            "confidence": "seasonally_calibrated"
         })
     
     save_intelligence(db, results, "county")

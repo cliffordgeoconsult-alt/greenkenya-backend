@@ -1,6 +1,6 @@
 # app/api/router.py
 from fastapi import APIRouter
-from app.api.endpoints import counties, subcounties, wards, forests, reports, waste, ai
+from app.api.endpoints import counties, subcounties, wards, forests, reports, waste, ai, carbon
 
 api_router = APIRouter()
 
@@ -41,4 +41,10 @@ api_router.include_router(
     ai.router,
     prefix="/ai",
     tags=["AI"]
+)
+
+api_router.include_router(
+    carbon.router,
+    prefix="/carbon",
+    tags=["Carbon"]
 )

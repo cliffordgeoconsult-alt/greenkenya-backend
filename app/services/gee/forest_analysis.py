@@ -2,6 +2,33 @@
 import ee
 from datetime import datetime
 
+COUNTY_MONITORING_RULES = {
+    # URBAN / HIGHLAND
+    "NAIROBI": {"start_month": 7, "end_month": 9, "tree": 0.58, "built": 0.45, "patch": 8},
+    "KIAMBU": {"start_month": 7, "end_month": 9, "tree": 0.72, "built": 0.18, "patch": 55},
+    "NYERI": {"start_month": 7, "end_month": 9, "tree": 0.70, "built": 0.20, "patch": 50},
+
+    # COASTAL
+    "MOMBASA": {"start_month": 6, "end_month": 9, "tree": 0.75, "built": 0.15, "patch": 50},
+    "KILIFI": {"start_month": 6, "end_month": 9, "tree": 0.68, "built": 0.20, "patch": 45},
+    "KWALE": {"start_month": 6, "end_month": 9, "tree": 0.68, "built": 0.20, "patch": 45},
+
+    # DRYLAND / ASAL
+    "TURKANA": {"start_month": 1, "end_month": 3, "tree": 0.52, "built": 0.20, "patch": 35},
+    "GARISSA": {"start_month": 1, "end_month": 3, "tree": 0.52, "built": 0.20, "patch": 35},
+    "WAJIR": {"start_month": 1, "end_month": 3, "tree": 0.50, "built": 0.20, "patch": 35},
+    "MANDERA": {"start_month": 1, "end_month": 3, "tree": 0.50, "built": 0.20, "patch": 35},
+
+    # DEFAULT ALL OTHERS
+    "DEFAULT": {"start_month": 7, "end_month": 9, "tree": 0.68, "built": 0.20, "patch": 45}
+}
+def get_county_rule(county_name):
+    county_name = (county_name or "").upper().strip()
+    return COUNTY_MONITORING_RULES.get(
+        county_name,
+        COUNTY_MONITORING_RULES["DEFAULT"]
+    )
+
 # For COUNTY / REPORTING (scientific standard)
 def get_reporting_forest_mask():
     hansen = ee.Image("UMD/hansen/global_forest_change_2024_v1_12")
@@ -302,45 +329,82 @@ def calculate_dw_transition(geometry, start_year=2020, end_year=2025):
     return {
         "regrowth_ha": round(ee.Number(regrowth_stats.get('trees')).getInfo() / 10000, 2),
     }
+def calculate_yearly_coverage(geometry, county_name, start_year=2017, end_year=2026):
 
-def calculate_yearly_coverage(geometry, start_year=2020, end_year=2026):
-    """
-    Calculates the total forested area (ha) for each year.
-    """
-    coverage_history = []
+    rule = get_county_rule(county_name)
+
+    start_month = rule["start_month"]
+    end_month = rule["end_month"]
+    tree_thr = rule["tree"]
+    built_thr = rule["built"]
+    patch_thr = rule["patch"]
+
+    now = datetime.now()
+    current_year = now.year
+
+    results = []
     pixel_area = ee.Image.pixelArea()
 
     for year in range(start_year, end_year + 1):
-        # Define the year window
-        start_date = f'{year}-01-01'
-        end_date = f'{year}-12-31'
-        
-        # If it's the current year (2026), only go up to today
-        if year == 2026:
-            end_date = datetime.now().strftime('%Y-%m-%d')
 
-        # Get smoothed tree probability for that specific year
-        tree_prob = get_dw_tree_probability(geometry, start_date, end_date)
-        
-        # Threshold: 0.5 probability counts as 'Forest Cover'
-        forest_mask = tree_prob.gt(0.7).selfMask()
-        
-        stats = forest_mask.multiply(pixel_area).reduceRegion(
+        start_date = f"{year}-{start_month:02d}-01"
+        end_date = f"{year}-{end_month:02d}-30"
+
+        # If current year and season hasn't started yet → skip / carry previous
+        if year == current_year:
+
+            season_start = datetime(current_year, start_month, 1)
+
+            if now < season_start:
+                results.append({
+                    "year": year,
+                    "forest_extent_ha": None
+                })
+                continue
+
+            end_date = now.strftime("%Y-%m-%d")
+
+        dw = ee.ImageCollection("GOOGLE/DYNAMICWORLD/V1") \
+            .filterBounds(geometry) \
+            .filterDate(start_date, end_date)
+
+        count = dw.size().getInfo()
+
+        if count == 0:
+            results.append({
+                "year": year,
+                "forest_extent_ha": None
+            })
+            continue
+
+        label_mode = dw.select("label").reduce(ee.Reducer.mode())
+        tree_prob = dw.select("trees").median()
+        built_prob = dw.select("built").median()
+
+        forest = (
+            label_mode.eq(1)
+            .And(tree_prob.gte(tree_thr))
+            .And(built_prob.lte(built_thr))
+        )
+
+        patch = forest.selfMask().connectedPixelCount(100, True)
+        forest = forest.And(patch.gte(patch_thr)).selfMask()
+
+        stats = forest.multiply(pixel_area).reduceRegion(
             reducer=ee.Reducer.sum(),
             geometry=geometry,
-            scale=30,
+            scale=10,
             maxPixels=1e13
         ).getInfo()
 
-        area_ha = round((stats.get('trees') or 0) / 10000, 2)
-        
-        coverage_history.append({
+        area = (list(stats.values())[0] if stats else 0) / 10000
+
+        results.append({
             "year": year,
-            "forest_extent_ha": area_ha
+            "forest_extent_ha": round(area, 2)
         })
 
-    return coverage_history
-
+    return results
 def calculate_degradation(geometry, start_year=2020, end_year=2025):
     """
     Detects degradation by finding pixels where the tree probability 
@@ -413,3 +477,16 @@ def calculate_confirmed_deforestation(geometry, start_date, end_date):
         (list(stats.values())[0] if stats else 0) / 10000,
         2
     )
+def select_stable_coverage_years(yearly_coverage):
+    """
+    Keep only trusted benchmark years.
+    """
+    preferred = [2018, 2021, 2024, 2026]
+
+    valid = []
+
+    for row in yearly_coverage:
+        if row["year"] in preferred and row["forest_extent_ha"] is not None:
+            valid.append(row)
+
+    return valid
