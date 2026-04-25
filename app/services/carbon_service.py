@@ -341,20 +341,22 @@ def get_national_carbon_map(year):
         .filterBounds(kenya)
     )
 
-    tree_prob = dw.select("trees").mean()
-
-    forest = tree_prob.gte(0.3)
+    tree_prob = (
+        dw.select("trees")
+        .mean()
+        .focal_mean(radius=500, units="meters")
+    )
 
     carbon = (
         tree_prob
         .pow(1.05)
-        .multiply(58)
+        .multiply(52)
         .add(
             biomass
             .focal_mean(radius=2500, units="meters")
             .multiply(0.12)
         )
-        .updateMask(tree_prob.gte(0.08))
+        .updateMask(tree_prob.gte(0.18))
         .reproject(crs="EPSG:4326", scale=250)
     )
 
