@@ -347,10 +347,12 @@ def get_national_carbon_map(year):
 
     carbon = (
         tree_prob
-        .pow(1.4)
-        .multiply(65)
+        .pow(1.05)
+        .multiply(58)
         .add(
-            biomass.focal_mean(radius=3000, units="meters").multiply(0.35)
+            biomass
+            .focal_mean(radius=2500, units="meters")
+            .multiply(0.12)
         )
         .updateMask(tree_prob.gte(0.08))
         .reproject(crs="EPSG:4326", scale=250)
