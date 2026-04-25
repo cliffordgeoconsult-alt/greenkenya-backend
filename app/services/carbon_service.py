@@ -353,7 +353,7 @@ def get_national_carbon_map(year):
             biomass.focal_mean(radius=3000, units="meters").multiply(0.35)
         )
         .updateMask(tree_prob.gte(0.08))
-        .reproject(crs="EPSG:4326", scale=100)
+        .reproject(crs="EPSG:4326", scale=250)
     )
 
     vis = {
