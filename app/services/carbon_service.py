@@ -346,31 +346,34 @@ def get_national_carbon_map(year):
     forest = tree_prob.gte(0.3)
 
     carbon = (
-        biomass
-        .focal_mean(radius=5000, units="meters")
-        .multiply(tree_prob)
-        .updateMask(tree_prob.gte(0.15))
-        .reproject(crs="EPSG:4326", scale=250)
+        tree_prob
+        .pow(1.4)
+        .multiply(65)
+        .add(
+            biomass.focal_mean(radius=3000, units="meters").multiply(0.35)
+        )
+        .updateMask(tree_prob.gte(0.08))
+        .reproject(crs="EPSG:4326", scale=100)
     )
 
     vis = {
-        "min": 2,
-        "max": 55,
+        "min": 3,
+        "max": 70,
         "palette": [
-            "#ffffcc",
-            "#c7e9b4",
-            "#7fcdbb",
-            "#41b6c4",
-            "#1d91c0",
-            "#225ea8",
-            "#0c2c84"
+            "#ffffe5",
+            "#d9f0a3",
+            "#78c679",
+            "#41ab5d",
+            "#238443",
+            "#005a32",
+            "#003320"
         ]
     }
 
     map_id = carbon.visualize(**vis).getMapId()
 
     return {
-        "title": "Kenya Above-Ground Carbon Storage Map",
+        "title": "Kenya Above-Ground Carbon Stock Map",
         "year": year,
         "status": "GreenMap baseline estimate" if year <= CURRENT_OFFICIAL_YEAR else "provisional estimate",
         "source": "GEDI + Dynamic World",
