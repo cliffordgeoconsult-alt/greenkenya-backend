@@ -347,7 +347,8 @@ def get_national_carbon_map(year):
 
     carbon = (
         biomass
-        .focal_mean(radius=1500, units="meters")
+        .focal_mean(radius=4000, units="meters")
+        .reproject(crs="EPSG:4326", scale=250)
         .updateMask(forest)
     )
 
@@ -356,11 +357,12 @@ def get_national_carbon_map(year):
         "max": 80,
         "palette": [
             "#ffffcc",
-            "#a1dab4",
+            "#c7e9b4",
+            "#7fcdbb",
             "#41b6c4",
-            "#2c7fb8",
-            "#253494",
-            "#081d58"
+            "#1d91c0",
+            "#225ea8",
+            "#0c2c84"
         ]
     }
 
@@ -371,7 +373,7 @@ def get_national_carbon_map(year):
         "year": year,
         "status": "GreenMap baseline estimate" if year <= CURRENT_OFFICIAL_YEAR else "provisional estimate",
         "source": "GEDI + Dynamic World",
-        "unit": "relative biomass density",
+        "unit": "modelled above-ground biomass intensity",
         "update_frequency": "annual",
         "tile_url": map_id["tile_fetcher"].url_format
     }
