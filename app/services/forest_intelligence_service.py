@@ -255,7 +255,12 @@ def run_ward_vegetation_analysis(db, entity_id=None):
         current_vitality_pct = round((vitality_stats.get('trees', 0) * 100), 2)
         
         # --- NEW: YEARLY COVERAGE ---
-        yearly_coverage = calculate_yearly_coverage(ee_geom, 2020, 2026)
+        yearly_coverage = calculate_yearly_coverage(
+            ee_geom,
+            None,
+            2020,
+            2026
+        )
         
         # Get the latest coverage (2026) for quick display
         latest_coverage_ha = yearly_coverage[-1]["forest_extent_ha"]
@@ -393,7 +398,12 @@ def run_subcounty_vegetation_analysis(db, entity_id=None):
         current_vitality_pct = round((vitality_stats.get('trees', 0) * 100), 2)
         
         # --- NEW: YEARLY COVERAGE ---
-        yearly_coverage = calculate_yearly_coverage(ee_geom, 2020, 2026)
+        yearly_coverage = calculate_yearly_coverage(
+            ee_geom,
+            None,
+            2020,
+            2026
+        )
         
         # Get the latest coverage (2026) for quick display
         latest_coverage_ha = yearly_coverage[-1]["forest_extent_ha"]
@@ -513,7 +523,12 @@ def run_national_vegetation_analysis(db):
     current_vitality_pct = round((vitality_stats.get('trees', 0) * 100), 2)
         
     # --- NEW: YEARLY COVERAGE ---
-    yearly_coverage = calculate_yearly_coverage(kenya_geom, 2020, 2026)
+    yearly_coverage = calculate_yearly_coverage(
+        kenya_geom,
+        None,
+        2020,
+        2026
+    )
         
         # Get the latest coverage (2026) for quick display
     latest_coverage_ha = yearly_coverage[-1]["forest_extent_ha"]
@@ -602,7 +617,7 @@ def run_reserve_loss_analysis(db):
 
     results = []
 
-    for r in reserves[:10]:
+    for r in reserves[:30]:
 
         reserve_id = r[0]
         name = r[1]
@@ -641,10 +656,16 @@ def run_reserve_loss_analysis(db):
         ).getInfo()
         
         # Convert 0-1 probability to a percentage 0-100
-        current_vitality_pct = round((vitality_stats.get('trees', 0) * 100), 2)
+        tree_val = vitality_stats.get("trees") or 0
+        current_vitality_pct = round(tree_val * 100, 2)
         
         # --- NEW: YEARLY COVERAGE ---
-        yearly_coverage = calculate_yearly_coverage(ee_geom, 2020, 2026)
+        yearly_coverage = calculate_yearly_coverage(
+            ee_geom,
+            name,
+            2020,
+            2026
+        )
         
         # Get the latest coverage (2026) for quick display
         latest_coverage_ha = yearly_coverage[-1]["forest_extent_ha"]
@@ -889,7 +910,12 @@ def run_forest_intelligence(db):
         current_vitality_pct = round((vitality_stats.get('trees', 0) * 100), 2)
         
         # --- NEW: YEARLY COVERAGE ---
-        yearly_coverage = calculate_yearly_coverage(ee_geom, 2020, 2026)
+        yearly_coverage = calculate_yearly_coverage(
+            ee_geom,
+            None,
+            2020,
+            2026
+        )
         
         # Get the latest coverage (2026) for quick display
         latest_coverage_ha = yearly_coverage[-1]["forest_extent_ha"]

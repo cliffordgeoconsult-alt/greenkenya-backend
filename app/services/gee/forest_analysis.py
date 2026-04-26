@@ -329,82 +329,102 @@ def calculate_dw_transition(geometry, start_year=2020, end_year=2025):
     return {
         "regrowth_ha": round(ee.Number(regrowth_stats.get('trees')).getInfo() / 10000, 2),
     }
-def calculate_yearly_coverage(geometry, county_name, start_year=2017, end_year=2026):
-
-    rule = get_county_rule(county_name)
-
-    start_month = rule["start_month"]
-    end_month = rule["end_month"]
-    tree_thr = rule["tree"]
-    built_thr = rule["built"]
-    patch_thr = rule["patch"]
+def calculate_yearly_coverage(geometry, county_name=None, start_year=2020, end_year=2026):
 
     now = datetime.now()
     current_year = now.year
+    pixel_area = ee.Image.pixelArea()
 
     results = []
-    pixel_area = ee.Image.pixelArea()
 
     for year in range(start_year, end_year + 1):
 
-        start_date = f"{year}-{start_month:02d}-01"
-        end_date = f"{year}-{end_month:02d}-30"
+        start_date = f"{year}-01-01"
+        end_date = f"{year}-12-31"
 
-        # If current year and season hasn't started yet → skip / carry previous
+        # current year = partial live year
         if year == current_year:
-
-            season_start = datetime(current_year, start_month, 1)
-
-            if now < season_start:
-                results.append({
-                    "year": year,
-                    "forest_extent_ha": None
-                })
-                continue
-
             end_date = now.strftime("%Y-%m-%d")
 
-        dw = ee.ImageCollection("GOOGLE/DYNAMICWORLD/V1") \
-            .filterBounds(geometry) \
+        dw = (
+            ee.ImageCollection("GOOGLE/DYNAMICWORLD/V1")
+            .filterBounds(geometry)
             .filterDate(start_date, end_date)
+        )
 
         count = dw.size().getInfo()
 
         if count == 0:
             results.append({
                 "year": year,
-                "forest_extent_ha": None
+                "forest_extent_ha": None,
+                "tree_cover_ha": None
             })
             continue
 
-        label_mode = dw.select("label").reduce(ee.Reducer.mode())
+        # yearly median probabilities
         tree_prob = dw.select("trees").median()
         built_prob = dw.select("built").median()
+        crop_prob = dw.select("crops").median()
+        bare_prob = dw.select("bare").median()
+        water_prob = dw.select("water").median()
 
-        forest = (
-            label_mode.eq(1)
-            .And(tree_prob.gte(tree_thr))
-            .And(built_prob.lte(built_thr))
+        # -------------------------
+        # DENSE FOREST
+        # -------------------------
+        dense = (
+            tree_prob.gte(0.65)
+            .And(built_prob.lte(0.15))
+            .And(crop_prob.lte(0.40))
+            .And(bare_prob.lte(0.20))
+            .And(water_prob.lte(0.10))
         )
 
-        patch = forest.selfMask().connectedPixelCount(100, True)
-        forest = forest.And(patch.gte(patch_thr)).selfMask()
+        dense_patch = dense.selfMask().connectedPixelCount(100, True)
 
-        stats = forest.multiply(pixel_area).reduceRegion(
+        dense = dense.And(dense_patch.gte(50)).selfMask()
+
+        # -------------------------
+        # TREE COVER
+        # -------------------------
+        cover = (
+            tree_prob.gte(0.35)
+            .And(built_prob.lte(0.35))
+            .And(water_prob.lte(0.20))
+        )
+
+        cover_patch = cover.selfMask().connectedPixelCount(100, True)
+
+        cover = cover.And(cover_patch.gte(10)).selfMask()
+
+        # -------------------------
+        # AREA
+        # -------------------------
+        dense_stats = dense.multiply(pixel_area).reduceRegion(
             reducer=ee.Reducer.sum(),
             geometry=geometry,
             scale=10,
             maxPixels=1e13
         ).getInfo()
 
-        area = (list(stats.values())[0] if stats else 0) / 10000
+        cover_stats = cover.multiply(pixel_area).reduceRegion(
+            reducer=ee.Reducer.sum(),
+            geometry=geometry,
+            scale=10,
+            maxPixels=1e13
+        ).getInfo()
+
+        dense_area = (list(dense_stats.values())[0] if dense_stats else 0) / 10000
+        cover_area = (list(cover_stats.values())[0] if cover_stats else 0) / 10000
 
         results.append({
             "year": year,
-            "forest_extent_ha": round(area, 2)
+            "forest_extent_ha": round(dense_area, 2),
+            "tree_cover_ha": round(cover_area, 2)
         })
 
     return results
+
 def calculate_degradation(geometry, start_year=2020, end_year=2025):
     """
     Detects degradation by finding pixels where the tree probability 
