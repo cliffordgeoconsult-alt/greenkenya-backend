@@ -292,17 +292,24 @@ def get_forest_gain_total(geometry):
     return stats
 
 def get_dw_tree_probability(geometry, start_date, end_date):
-    """
-    Returns a smoothed tree probability map for a specific period.
-    This reduces the 'flicker' noise common in Dynamic World.
-    """
-    dw = ee.ImageCollection("GOOGLE/DYNAMICWORLD/V1") \
-        .filterBounds(geometry) \
-        .filterDate(start_date, end_date) \
+
+    dw = (
+        ee.ImageCollection("GOOGLE/DYNAMICWORLD/V1")
+        .filterBounds(geometry)
+        .filterDate(start_date, end_date)
         .select('trees')
-    
-    # Use mean or median to smooth out cloud shadows/sensor noise
-    return dw.mean().clip(geometry)
+    )
+
+    # CHECK IF EMPTY
+    count = dw.size()
+
+    return ee.Image(
+        ee.Algorithms.If(
+            count.gt(0),
+            dw.mean().clip(geometry),
+            ee.Image(0).rename("trees")  # SAFE fallback
+        )
+    )
 
 def calculate_dw_transition(geometry, start_year=2020, end_year=2025):
     """
@@ -319,16 +326,67 @@ def calculate_dw_transition(geometry, start_year=2020, end_year=2025):
     
     pixel_area = ee.Image.pixelArea()
     
-    regrowth_stats = regrowth.multiply(pixel_area).reduceRegion(
+    # 🔥 FINAL SAFE VERSION (NO IF, NO CRASH)
+    regrowth_area = regrowth.multiply(pixel_area).unmask(0)
+
+    stats = regrowth_area.reduceRegion(
         reducer=ee.Reducer.sum(),
         geometry=geometry,
         scale=10,
         maxPixels=1e13
-    )
-    
+    ).getInfo()
+
+    regrowth_ha = round((list(stats.values())[0] if stats else 0) / 10000, 2)
+
     return {
-        "regrowth_ha": round(ee.Number(regrowth_stats.get('trees')).getInfo() / 10000, 2),
+        "regrowth_ha": regrowth_ha
     }
+
+    return {
+        "regrowth_ha": round((stats.get("trees", 0) or 0) / 10000, 2)
+    }
+
+
+def smooth_forest_coverage(series):
+    """
+    3-year rolling median smoothing
+    """
+
+    if not series or len(series) < 3:
+        return series
+
+    smoothed = []
+
+    for i in range(len(series)):
+
+        # edges stay same
+        if i == 0 or i == len(series) - 1:
+            smoothed.append(series[i])
+            continue
+
+        window = [
+            series[i - 1]["forest_extent_ha"],
+            series[i]["forest_extent_ha"],
+            series[i + 1]["forest_extent_ha"]
+        ]
+
+        window = [v for v in window if v is not None]
+
+        if not window:
+            smoothed.append(series[i])
+            continue
+
+        median_val = sorted(window)[len(window)//2]
+
+        smoothed.append({
+            "year": series[i]["year"],
+            "forest_extent_ha": round(median_val, 2),
+            "tree_cover_ha": series[i]["tree_cover_ha"],
+            "method": "smoothed"
+        })
+
+    return smoothed
+
 def calculate_yearly_coverage(geometry, county_name=None, start_year=2020, end_year=2026):
 
     now = datetime.now()
@@ -423,7 +481,8 @@ def calculate_yearly_coverage(geometry, county_name=None, start_year=2020, end_y
             "tree_cover_ha": round(cover_area, 2)
         })
 
-    return results
+    smoothed = smooth_forest_coverage(results)
+    return smoothed
 
 def calculate_degradation(geometry, start_year=2020, end_year=2025):
     """
@@ -441,12 +500,16 @@ def calculate_degradation(geometry, start_year=2020, end_year=2025):
         .selfMask()
     
     pixel_area = ee.Image.pixelArea()
-    stats = degradation_mask.multiply(pixel_area).reduceRegion(
+    area = degradation_mask.multiply(pixel_area).unmask(0)
+
+    stats = area.reduceRegion(
         reducer=ee.Reducer.sum(),
         geometry=geometry,
         scale=10,
         maxPixels=1e13
     ).getInfo()
+
+    return round((list(stats.values())[0] if stats else 0) / 10000, 2)
 
     return round((stats.get('trees') or 0) / 10000, 2)
 
@@ -456,9 +519,11 @@ def calculate_confirmed_deforestation(geometry, start_date, end_date):
     forest = get_reporting_forest_mask()
 
     # 2. RADD alerts (time-bound)
-    alerts = ee.ImageCollection("projects/glad/alert/UpdResult") \
-        .filterBounds(geometry) \
+    alerts = (
+        ee.ImageCollection("projects/glad/alert/UpdResult")
+        .filterBounds(geometry)
         .filterDate(start_date, end_date)
+    )
 
     # 3. Select correct band dynamically
     def extract_conf(img):
@@ -475,7 +540,16 @@ def calculate_confirmed_deforestation(geometry, start_date, end_date):
             )
         )
 
-    alert_img = alerts.map(extract_conf).max()
+    # 🔥 CRITICAL FIX — HANDLE EMPTY COLLECTION
+    count = alerts.size()
+
+    alert_img = ee.Image(
+        ee.Algorithms.If(
+            count.gt(0),
+            alerts.map(extract_conf).max(),
+            ee.Image(0)  # fallback when no alerts exist
+        )
+    )
 
     # 4. High confidence only
     confirmed = alert_img.gte(2)
@@ -497,16 +571,3 @@ def calculate_confirmed_deforestation(geometry, start_date, end_date):
         (list(stats.values())[0] if stats else 0) / 10000,
         2
     )
-def select_stable_coverage_years(yearly_coverage):
-    """
-    Keep only trusted benchmark years.
-    """
-    preferred = [2018, 2021, 2024, 2026]
-
-    valid = []
-
-    for row in yearly_coverage:
-        if row["year"] in preferred and row["forest_extent_ha"] is not None:
-            valid.append(row)
-
-    return valid

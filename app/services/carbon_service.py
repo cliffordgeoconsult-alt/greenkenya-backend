@@ -900,3 +900,18 @@ def get_national_carbon_map(year=None):
         "update_frequency": "annual",
         "tile_url": map_id["tile_fetcher"].url_format
     }
+
+def calculate_net_carbon(carbon_gain_tonnes, carbon_loss_tonnes):
+    net = carbon_gain_tonnes - carbon_loss_tonnes
+
+    if net > 0:
+        status = "sink"
+    elif net < 0:
+        status = "source"
+    else:
+        status = "neutral"
+
+    return {
+        "net_carbon_tonnes": round(net, 2),
+        "carbon_status": status
+    }

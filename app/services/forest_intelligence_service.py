@@ -15,9 +15,7 @@ from app.services.gee.forest_analysis import (
     get_dw_tree_probability,
     calculate_dw_transition,
     calculate_yearly_coverage,
-    calculate_degradation,
-    calculate_confirmed_deforestation,
-    select_stable_coverage_years
+    # calculate_confirmed_deforestation
 )
 from app.services.admin_service import get_counties
 from app.services.admin_service import get_subcounties
@@ -29,6 +27,7 @@ from app.services.radd_analytics_service import (
 )
 from app.services.radd_query_service import get_radd_alerts_count
 from app.services.ai_service import generate_ai_insight
+from app.services.carbon_service import calculate_net_carbon
 from datetime import datetime, timedelta
 
 today = datetime.now().strftime('%Y-%m-%d')
@@ -101,21 +100,6 @@ def run_vegetation_analysis(db, level=None, entity_id=None):
         dw_transitions = calculate_dw_transition(ee_geom, 2020, 2025)
         regrowth_ha = dw_transitions.get("regrowth_ha", 0)
 
-        # Monthly Auto-Update: Calculate current month vitality
-        current_vitality_img = get_dw_tree_probability(ee_geom, this_month_start, today)
-        masked = current_vitality_img.updateMask(
-            current_vitality_img.gte(0.35)
-        )
-
-        vitality_stats = masked.reduceRegion(
-            reducer=ee.Reducer.mean(),
-            geometry=ee_geom,
-            scale=10,
-            maxPixels=1e13
-        ).getInfo()
-        
-        # Convert 0-1 probability to a percentage 0-100
-        current_vitality_pct = round((vitality_stats.get('trees', 0) * 100), 2)
         
         # --- NEW: YEARLY COVERAGE ---
         yearly_coverage = calculate_yearly_coverage(
@@ -125,29 +109,39 @@ def run_vegetation_analysis(db, level=None, entity_id=None):
             2026
         )
 
-        stable_coverage = select_stable_coverage_years(yearly_coverage)
-
-        valid = [x for x in stable_coverage if x["forest_extent_ha"] is not None]
+        valid = [x for x in yearly_coverage if x["forest_extent_ha"] is not None]
 
         latest_coverage_ha = valid[-1]["forest_extent_ha"] if valid else None
-
-        # --- COMPUTE DEGRADATION ---
-        degradation_ha = calculate_degradation(ee_geom, 2020, 2025)
 
         # --- COMPUTE CONFIRMED DEFORESTATION ---
         year_start = f"{datetime.now().year}-01-01"
 
-        confirmed_deforestation_ha = calculate_confirmed_deforestation(
-            ee_geom,
-            year_start,
-            today
-        )
-        month_start = datetime.now().strftime('%Y-%m-01')
+        # confirmed_deforestation_ha = calculate_confirmed_deforestation(
+        #     ee_geom,
+        #     year_start,
+        #     today
+        # )
+        # month_start = datetime.now().strftime('%Y-%m-01')
 
-        confirmed_deforestation_month_ha = calculate_confirmed_deforestation(
-            ee_geom,
-            month_start,
-            today
+        # confirmed_deforestation_month_ha = calculate_confirmed_deforestation(
+        #     ee_geom,
+        #     month_start,
+        #     today
+        # )
+
+        # -----------------------------------
+        # CARBON CALCULATIONS
+        # -----------------------------------
+
+        # Temporary density (replace later with real lookup)
+        carbon_density = 35  
+
+        carbon_loss_tonnes = total_loss_ha * carbon_density
+        carbon_gain_tonnes = regrowth_ha * carbon_density
+
+        net_carbon = calculate_net_carbon(
+            carbon_gain_tonnes,
+            carbon_loss_tonnes
         )
 
         # 6. RISK & ALERTS
@@ -156,6 +150,18 @@ def run_vegetation_analysis(db, level=None, entity_id=None):
         recent_alerts = sum([d["alerts"] for d in radd_daily]) if radd_daily else 0
 
         risk = calculate_risk(loss_pct, alerts_total, recent_alerts)
+
+        # -----------------------------------
+        # CARBON ALERT
+        # -----------------------------------
+        def carbon_risk_alert(density, alerts):
+            if density > 80 and alerts > 100:
+                return "high_carbon_under_threat"
+            elif density > 50 and alerts > 50:
+                return "carbon_risk"
+            return "stable"
+
+        carbon_alert = carbon_risk_alert(carbon_density, alerts_total)
 
         # 7. ASSEMBLE RESULTS
         results.append({
@@ -169,11 +175,9 @@ def run_vegetation_analysis(db, level=None, entity_id=None):
             
             # DYNAMIC WORLD (NEW MV FEATURES)
             "regrowth_ha": regrowth_ha, 
-            "vitality_pct": current_vitality_pct,
-            "degradation_ha": degradation_ha,
             "monitoring_month": this_month_start,
             "latest_coverage_ha": latest_coverage_ha,
-            "coverage_benchmark_years": stable_coverage,
+            "coverage_timeseries": yearly_coverage,
             "coverage_note": "Approximate satellite-derived estimate",
 
             # HISTORICAL LOSS
@@ -187,8 +191,16 @@ def run_vegetation_analysis(db, level=None, entity_id=None):
             "radd_monthly": radd_monthly,
             "alerts": alerts_count,
             "alerts_total": alerts_total,
-            "confirmed_deforestation_ha": confirmed_deforestation_ha,
-            "confirmed_deforestation_month_ha": confirmed_deforestation_month_ha,
+            # "confirmed_deforestation_ha": confirmed_deforestation_ha,
+            # "confirmed_deforestation_month_ha": confirmed_deforestation_month_ha,
+            
+            # CARBON
+            # CARBON
+            "net_carbon_tonnes": net_carbon["net_carbon_tonnes"],
+            "carbon_status": net_carbon["carbon_status"],
+
+            # ALERT
+            "carbon_alert": carbon_alert,
             
             # STATUS
             "risk": risk,
@@ -242,17 +254,17 @@ def run_ward_vegetation_analysis(db, entity_id=None):
         dw_transitions = calculate_dw_transition(ee_geom, 2020, 2025)
         regrowth_ha = dw_transitions.get("regrowth_ha", 0)
 
-        # Monthly Auto-Update: Calculate current month vitality
-        current_vitality_img = get_dw_tree_probability(ee_geom, this_month_start, today)
-        vitality_stats = current_vitality_img.reduceRegion(
-            reducer=ee.Reducer.mean(),
-            geometry=ee_geom,
-            scale=30,  # Scaled for performance
-            maxPixels=1e13
-        ).getInfo()
+        # # Monthly Auto-Update: Calculate current month vitality
+        # current_vitality_img = get_dw_tree_probability(ee_geom, this_month_start, today)
+        # vitality_stats = current_vitality_img.reduceRegion(
+        #     reducer=ee.Reducer.mean(),
+        #     geometry=ee_geom,
+        #     scale=30,  # Scaled for performance
+        #     maxPixels=1e13
+        # ).getInfo()
         
-        # Convert 0-1 probability to a percentage 0-100
-        current_vitality_pct = round((vitality_stats.get('trees', 0) * 100), 2)
+        # # Convert 0-1 probability to a percentage 0-100
+        # current_vitality_pct = round((vitality_stats.get('trees', 0) * 100), 2)
         
         # --- NEW: YEARLY COVERAGE ---
         yearly_coverage = calculate_yearly_coverage(
@@ -264,10 +276,6 @@ def run_ward_vegetation_analysis(db, entity_id=None):
         
         # Get the latest coverage (2026) for quick display
         latest_coverage_ha = yearly_coverage[-1]["forest_extent_ha"]
-
-        # --- COMPUTE DEGRADATION ---
-        degradation_ha = calculate_degradation(ee_geom, 2020, 2025)
-
         # RADD REAL-TIME
         alerts_count = get_radd_alerts_count(db, json.dumps(geojson))
         radd_daily = get_radd_daily(db, json.dumps(geojson))
@@ -278,18 +286,18 @@ def run_ward_vegetation_analysis(db, entity_id=None):
 
         year_start = f"{datetime.now().year}-01-01"
 
-        confirmed_deforestation_ha = calculate_confirmed_deforestation(
-            ee_geom,
-            year_start,
-            today
-        )
-        month_start = datetime.now().strftime('%Y-%m-01')
+        # confirmed_deforestation_ha = calculate_confirmed_deforestation(
+        #     ee_geom,
+        #     year_start,
+        #     today
+        # )
+        # month_start = datetime.now().strftime('%Y-%m-01')
 
-        confirmed_deforestation_month_ha = calculate_confirmed_deforestation(
-            ee_geom,
-            month_start,
-            today
-        )
+        # confirmed_deforestation_month_ha = calculate_confirmed_deforestation(
+        #     ee_geom,
+        #     month_start,
+        #     today
+        # )
 
         # GAIN
         gain_stats = get_forest_gain_total(ee_geom)
@@ -318,8 +326,7 @@ def run_ward_vegetation_analysis(db, entity_id=None):
 
             # DYNAMIC WORLD (NEW MV FEATURES)
             "regrowth_ha": regrowth_ha, 
-            "vitality_pct": current_vitality_pct,
-            "degradation_ha": degradation_ha,
+            # "vitality_pct": current_vitality_pct,
             "monitoring_month": this_month_start,
             "latest_coverage_ha": latest_coverage_ha,
             "yearly_coverage": yearly_coverage,
@@ -330,8 +337,8 @@ def run_ward_vegetation_analysis(db, entity_id=None):
             "radd_monthly": radd_monthly,
             "alerts": alerts_count,
             "alerts_total": alerts_total,
-            "confirmed_deforestation_ha": confirmed_deforestation_ha,
-            "confirmed_deforestation_month_ha": confirmed_deforestation_month_ha,
+            # "confirmed_deforestation_ha": confirmed_deforestation_ha,
+            # "confirmed_deforestation_month_ha": confirmed_deforestation_month_ha,
 
             # STATUS
             "risk": risk
@@ -385,17 +392,17 @@ def run_subcounty_vegetation_analysis(db, entity_id=None):
         dw_transitions = calculate_dw_transition(ee_geom, 2020, 2025)
         regrowth_ha = dw_transitions.get("regrowth_ha", 0)
 
-        # Monthly Auto-Update: Calculate current month vitality
-        current_vitality_img = get_dw_tree_probability(ee_geom, this_month_start, today)
-        vitality_stats = current_vitality_img.reduceRegion(
-            reducer=ee.Reducer.mean(),
-            geometry=ee_geom,
-            scale=30,  # Scaled for performance
-            maxPixels=1e13
-        ).getInfo()
+        # # Monthly Auto-Update: Calculate current month vitality
+        # current_vitality_img = get_dw_tree_probability(ee_geom, this_month_start, today)
+        # vitality_stats = current_vitality_img.reduceRegion(
+        #     reducer=ee.Reducer.mean(),
+        #     geometry=ee_geom,
+        #     scale=30,  # Scaled for performance
+        #     maxPixels=1e13
+        # ).getInfo()
         
-        # Convert 0-1 probability to a percentage 0-100
-        current_vitality_pct = round((vitality_stats.get('trees', 0) * 100), 2)
+        # # Convert 0-1 probability to a percentage 0-100
+        # current_vitality_pct = round((vitality_stats.get('trees', 0) * 100), 2)
         
         # --- NEW: YEARLY COVERAGE ---
         yearly_coverage = calculate_yearly_coverage(
@@ -407,10 +414,6 @@ def run_subcounty_vegetation_analysis(db, entity_id=None):
         
         # Get the latest coverage (2026) for quick display
         latest_coverage_ha = yearly_coverage[-1]["forest_extent_ha"]
-
-        # --- COMPUTE DEGRADATION ---
-        degradation_ha = calculate_degradation(ee_geom, 2020, 2025)
-
         # RADD (REAL-TIME)
         alerts_count = get_radd_alerts_count(db, json.dumps(geojson))
         radd_daily = get_radd_daily(db, json.dumps(geojson))
@@ -421,18 +424,18 @@ def run_subcounty_vegetation_analysis(db, entity_id=None):
 
         year_start = f"{datetime.now().year}-01-01"
 
-        confirmed_deforestation_ha = calculate_confirmed_deforestation(
-            ee_geom,
-            year_start,
-            today
-        )
-        month_start = datetime.now().strftime('%Y-%m-01')
+        # confirmed_deforestation_ha = calculate_confirmed_deforestation(
+        #     ee_geom,
+        #     year_start,
+        #     today
+        # )
+        # month_start = datetime.now().strftime('%Y-%m-01')
 
-        confirmed_deforestation_month_ha = calculate_confirmed_deforestation(
-            ee_geom,
-            month_start,
-            today
-        )
+        # confirmed_deforestation_month_ha = calculate_confirmed_deforestation(
+        #     ee_geom,
+        #     month_start,
+        #     today
+        # )
 
         # RISK
         recent_alerts = sum([d["alerts"] for d in radd_daily]) if radd_daily else 0
@@ -455,8 +458,7 @@ def run_subcounty_vegetation_analysis(db, entity_id=None):
 
             # DYNAMIC WORLD (NEW MV FEATURES)
             "regrowth_ha": regrowth_ha, 
-            "vitality_pct": current_vitality_pct,
-            "degradation_ha": degradation_ha,
+            # "vitality_pct": current_vitality_pct,
             "monitoring_month": this_month_start,
             "latest_coverage_ha": latest_coverage_ha,
             "yearly_coverage": yearly_coverage,
@@ -467,8 +469,8 @@ def run_subcounty_vegetation_analysis(db, entity_id=None):
             "radd_monthly": radd_monthly,
             "alerts": alerts_count,
             "alerts_total": alerts_total,
-            "confirmed_deforestation_ha": confirmed_deforestation_ha,
-            "confirmed_deforestation_month_ha": confirmed_deforestation_month_ha,
+            # "confirmed_deforestation_ha": confirmed_deforestation_ha,
+            # "confirmed_deforestation_month_ha": confirmed_deforestation_month_ha,
 
             # STATUS
             "risk": risk
@@ -510,17 +512,17 @@ def run_national_vegetation_analysis(db):
     dw_transitions = calculate_dw_transition(kenya_geom, 2020, 2025)
     regrowth_ha = dw_transitions.get("regrowth_ha", 0)
 
-    # Monthly Auto-Update: Calculate current month vitality
-    current_vitality_img = get_dw_tree_probability(kenya_geom, this_month_start, today)
-    vitality_stats = current_vitality_img.reduceRegion(
-        reducer=ee.Reducer.mean(),
-        geometry=kenya_geom,
-        scale=30,  # Scaled for performance
-        maxPixels=1e13
-    ).getInfo()
+    # # # Monthly Auto-Update: Calculate current month vitality
+    # # current_vitality_img = get_dw_tree_probability(kenya_geom, this_month_start, today)
+    # # vitality_stats = current_vitality_img.reduceRegion(
+    # #     reducer=ee.Reducer.mean(),
+    # #     geometry=kenya_geom,
+    # #     scale=30,  # Scaled for performance
+    # #     maxPixels=1e13
+    # # ).getInfo()
         
-        # Convert 0-1 probability to a percentage 0-100
-    current_vitality_pct = round((vitality_stats.get('trees', 0) * 100), 2)
+    #     # Convert 0-1 probability to a percentage 0-100
+    # current_vitality_pct = round((vitality_stats.get('trees', 0) * 100), 2)
         
     # --- NEW: YEARLY COVERAGE ---
     yearly_coverage = calculate_yearly_coverage(
@@ -533,8 +535,6 @@ def run_national_vegetation_analysis(db):
         # Get the latest coverage (2026) for quick display
     latest_coverage_ha = yearly_coverage[-1]["forest_extent_ha"]
 
-     # --- COMPUTE DEGRADATION ---
-    degradation_ha = calculate_degradation(kenya_geom, 2020, 2025)
     # ⚡ RADD
     alerts_count = get_radd_alerts_count(db, result.geojson)
     radd_daily = get_radd_daily(db, result.geojson)
@@ -546,18 +546,18 @@ def run_national_vegetation_analysis(db):
 
     year_start = f"{datetime.now().year}-01-01"
 
-    confirmed_deforestation_ha = calculate_confirmed_deforestation(
-        kenya_geom,
-        year_start,
-        today
-    )
-    month_start = datetime.now().strftime('%Y-%m-01')
+    # # confirmed_deforestation_ha = calculate_confirmed_deforestation(
+    #     kenya_geom,
+    #     year_start,
+    #     today
+    # )
+    # month_start = datetime.now().strftime('%Y-%m-01')
 
-    confirmed_deforestation_month_ha = calculate_confirmed_deforestation(
-            kenya_geom,
-            month_start,
-            today
-        )
+    # confirmed_deforestation_month_ha = calculate_confirmed_deforestation(
+    #         kenya_geom,
+    #         month_start,
+    #         today
+    #     )
 
     # GAIN
     gain_stats = get_forest_gain_total(kenya_geom)
@@ -584,8 +584,7 @@ def run_national_vegetation_analysis(db):
 
         # DYNAMIC WORLD (NEW MV FEATURES)
             "regrowth_ha": regrowth_ha, 
-            "vitality_pct": current_vitality_pct,
-            "degradation_ha": degradation_ha,
+            # "vitality_pct": current_vitality_pct,
             "monitoring_month": this_month_start,
             "latest_coverage_ha": latest_coverage_ha,
             "yearly_coverage": yearly_coverage,
@@ -596,8 +595,8 @@ def run_national_vegetation_analysis(db):
         "radd_monthly": radd_monthly,
         "alerts": alerts_count,
         "alerts_total": alerts_total,
-        "confirmed_deforestation_ha": confirmed_deforestation_ha,
-        "confirmed_deforestation_month_ha": confirmed_deforestation_month_ha,
+        # "confirmed_deforestation_ha": confirmed_deforestation_ha,
+        # "confirmed_deforestation_month_ha": confirmed_deforestation_month_ha,
 
         # STATUS
         "risk": risk
@@ -617,7 +616,7 @@ def run_reserve_loss_analysis(db):
 
     results = []
 
-    for r in reserves[:30]:
+    for r in reserves[:2]:
 
         reserve_id = r[0]
         name = r[1]
@@ -646,18 +645,30 @@ def run_reserve_loss_analysis(db):
         dw_transitions = calculate_dw_transition(ee_geom, 2020, 2025)
         regrowth_ha = dw_transitions.get("regrowth_ha", 0)
 
-        # Monthly Auto-Update: Calculate current month vitality
-        current_vitality_img = get_dw_tree_probability(ee_geom, this_month_start, today)
-        vitality_stats = current_vitality_img.reduceRegion(
-            reducer=ee.Reducer.mean(),
-            geometry=ee_geom,
-            scale=30,  # Scaled for performance
-            maxPixels=1e13
-        ).getInfo()
-        
-        # Convert 0-1 probability to a percentage 0-100
-        tree_val = vitality_stats.get("trees") or 0
-        current_vitality_pct = round(tree_val * 100, 2)
+        # # Monthly Auto-Update: Calculate current month vitality
+        # current_vitality_img = get_dw_tree_probability(ee_geom, this_month_start, today)
+        # vitality_stats = ee.Dictionary(
+        #     ee.Algorithms.If(
+        #         current_vitality_img.reduceRegion(
+        #             reducer=ee.Reducer.count(),
+        #             geometry=ee_geom,
+        #             scale=30,
+        #             maxPixels=1e13
+        #         ).values().get(0),
+
+        #         current_vitality_img.reduceRegion(
+        #             reducer=ee.Reducer.mean(),
+        #             geometry=ee_geom,
+        #             scale=30,
+        #             maxPixels=1e13
+        #         ),
+
+        #         ee.Dictionary({"trees": 0})
+        #     )
+        # ).getInfo()
+
+        # tree_val = vitality_stats.get("trees", 0)
+        # current_vitality_pct = round(tree_val * 100, 2)
         
         # --- NEW: YEARLY COVERAGE ---
         yearly_coverage = calculate_yearly_coverage(
@@ -669,10 +680,6 @@ def run_reserve_loss_analysis(db):
         
         # Get the latest coverage (2026) for quick display
         latest_coverage_ha = yearly_coverage[-1]["forest_extent_ha"]
-
-        # --- COMPUTE DEGRADATION ---
-        degradation_ha = calculate_degradation(ee_geom, 2020, 2025)
-
         # RADD
         alerts_count = get_radd_alerts_count(db, json.dumps(geojson))
         radd_daily = get_radd_daily(db, json.dumps(geojson))
@@ -684,18 +691,18 @@ def run_reserve_loss_analysis(db):
         # 
         year_start = f"{datetime.now().year}-01-01"
 
-        confirmed_deforestation_ha = calculate_confirmed_deforestation(
-            ee_geom,
-            year_start,
-            today
-        )
-        month_start = datetime.now().strftime('%Y-%m-01')
+        # confirmed_deforestation_ha = calculate_confirmed_deforestation(
+        #     ee_geom,
+        #     year_start,
+        #     today
+        # )
+        # month_start = datetime.now().strftime('%Y-%m-01')
 
-        confirmed_deforestation_month_ha = calculate_confirmed_deforestation(
-            ee_geom,
-            month_start,
-            today
-        )
+        # confirmed_deforestation_month_ha = calculate_confirmed_deforestation(
+        #     ee_geom,
+        #     month_start,
+        #     today
+        # )
 
         # GAIN
         gain_stats = get_forest_gain_total(ee_geom)
@@ -722,8 +729,7 @@ def run_reserve_loss_analysis(db):
 
             # DYNAMIC WORLD (NEW MV FEATURES)
             "regrowth_ha": regrowth_ha, 
-            "vitality_pct": current_vitality_pct,
-            "degradation_ha": degradation_ha,
+            # "vitality_pct": current_vitality_pct,
             "monitoring_month": this_month_start,
             "latest_coverage_ha": latest_coverage_ha,
             "yearly_coverage": yearly_coverage,
@@ -734,8 +740,8 @@ def run_reserve_loss_analysis(db):
             "radd_monthly": radd_monthly,
             "alerts": alerts_count,
             "alerts_total": alerts_total,
-            "confirmed_deforestation_ha": confirmed_deforestation_ha,
-            "confirmed_deforestation_month_ha": confirmed_deforestation_month_ha,
+            # "confirmed_deforestation_ha": confirmed_deforestation_ha,
+            # "confirmed_deforestation_month_ha": confirmed_deforestation_month_ha,
             # STATUS
             "risk": risk
         })
@@ -797,18 +803,18 @@ def run_non_reserve_forest_analysis(db):
 
         year_start = f"{datetime.now().year}-01-01"
 
-        confirmed_deforestation_ha = calculate_confirmed_deforestation(
-            ee_geom,
-            year_start,
-            today
-        )
-        month_start = datetime.now().strftime('%Y-%m-01')
+        # confirmed_deforestation_ha = calculate_confirmed_deforestation(
+        #     ee_geom,
+        #     year_start,
+        #     today
+        # )
+        # month_start = datetime.now().strftime('%Y-%m-01')
 
-        confirmed_deforestation_month_ha = calculate_confirmed_deforestation(
-            ee_geom,
-            month_start,
-            today
-        )
+        # confirmed_deforestation_month_ha = calculate_confirmed_deforestation(
+        #     ee_geom,
+        #     month_start,
+        #     today
+        # )
 
         # GAIN
         gain_stats = get_forest_gain_total(ee_geom)
@@ -839,8 +845,8 @@ def run_non_reserve_forest_analysis(db):
             "radd_monthly": radd_monthly,
             "alerts": alerts_count,
             "alerts_total": alerts_total,
-            "confirmed_deforestation_ha": confirmed_deforestation_ha,
-            "confirmed_deforestation_month_ha": confirmed_deforestation_month_ha,
+            # "confirmed_deforestation_ha": confirmed_deforestation_ha,
+            # "confirmed_deforestation_month_ha": confirmed_deforestation_month_ha,
 
 
             # STATUS
@@ -897,17 +903,17 @@ def run_forest_intelligence(db):
         dw_transitions = calculate_dw_transition(ee_geom, 2020, 2025)
         regrowth_ha = dw_transitions.get("regrowth_ha", 0)
 
-        # Monthly Auto-Update: Calculate current month vitality
-        current_vitality_img = get_dw_tree_probability(ee_geom, this_month_start, today)
-        vitality_stats = current_vitality_img.reduceRegion(
-            reducer=ee.Reducer.mean(),
-            geometry=ee_geom,
-            scale=30,  # Scaled for performance
-            maxPixels=1e13
-        ).getInfo()
+        # # Monthly Auto-Update: Calculate current month vitality
+        # current_vitality_img = get_dw_tree_probability(ee_geom, this_month_start, today)
+        # vitality_stats = current_vitality_img.reduceRegion(
+        #     reducer=ee.Reducer.mean(),
+        #     geometry=ee_geom,
+        #     scale=30,  # Scaled for performance
+        #     maxPixels=1e13
+        # ).getInfo()
         
-        # Convert 0-1 probability to a percentage 0-100
-        current_vitality_pct = round((vitality_stats.get('trees', 0) * 100), 2)
+        # # Convert 0-1 probability to a percentage 0-100
+        # current_vitality_pct = round((vitality_stats.get('trees', 0) * 100), 2)
         
         # --- NEW: YEARLY COVERAGE ---
         yearly_coverage = calculate_yearly_coverage(
@@ -919,10 +925,6 @@ def run_forest_intelligence(db):
         
         # Get the latest coverage (2026) for quick display
         latest_coverage_ha = yearly_coverage[-1]["forest_extent_ha"]
-
-        # --- COMPUTE DEGRADATION ---
-        degradation_ha = calculate_degradation(ee_geom, 2020, 2025)
-
         # RADD
         alerts_count = get_radd_alerts_count(db, json.dumps(geojson))
         radd_daily = get_radd_daily(db, json.dumps(geojson))
@@ -934,18 +936,18 @@ def run_forest_intelligence(db):
 
         year_start = f"{datetime.now().year}-01-01"
 
-        confirmed_deforestation_ha = calculate_confirmed_deforestation(
-            ee_geom,
-            year_start,
-            today
-        )
-        month_start = datetime.now().strftime('%Y-%m-01')
+        # confirmed_deforestation_ha = calculate_confirmed_deforestation(
+        #     ee_geom,
+        #     year_start,
+        #     today
+        # )
+        # month_start = datetime.now().strftime('%Y-%m-01')
 
-        confirmed_deforestation_month_ha = calculate_confirmed_deforestation(
-            ee_geom,
-            month_start,
-            today
-        )
+        # confirmed_deforestation_month_ha = calculate_confirmed_deforestation(
+        #     ee_geom,
+        #     month_start,
+        #     today
+        # )
 
         # PROTECTION CHECK
         reserve = db.execute(text("""
@@ -990,8 +992,7 @@ def run_forest_intelligence(db):
 
             # DYNAMIC WORLD (NEW MV FEATURES)
             "regrowth_ha": regrowth_ha, 
-            "vitality_pct": current_vitality_pct,
-            "degradation_ha": degradation_ha,
+            # "vitality_pct": current_vitality_pct,
             "monitoring_month": this_month_start,
             "latest_coverage_ha": latest_coverage_ha,
             "yearly_coverage": yearly_coverage,
@@ -1002,8 +1003,8 @@ def run_forest_intelligence(db):
             "radd_monthly": radd_monthly,
             "alerts": alerts_count,
             "alerts_total": alerts_total,
-            "confirmed_deforestation_ha": confirmed_deforestation_ha,
-            "confirmed_deforestation_month_ha": confirmed_deforestation_month_ha,
+            # "confirmed_deforestation_ha": confirmed_deforestation_ha,
+            # "confirmed_deforestation_month_ha": confirmed_deforestation_month_ha,
             # STATUS
             "risk": risk
         })
