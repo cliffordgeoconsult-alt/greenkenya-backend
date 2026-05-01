@@ -35,17 +35,23 @@ def initialize_ee():
     except Exception as e:
         print("❌ EE init failed:", str(e))
 
+def get_last_radd_date(db: Session):
+    result = db.execute(text("""
+        SELECT MAX(alert_date) FROM radd_alerts
+    """)).fetchone()
+
+    return result[0] if result and result[0] else None
 
 # =========================
 # FETCH RADD ALERTS (NO LOSS)
 # =========================
-def fetch_radd_alerts_gee(geojson):
+def fetch_radd_alerts_gee(geojson, start_date):
 
     geom = ee.Geometry(json.loads(geojson))
 
     collection = ee.ImageCollection("projects/glad/alert/UpdResult") \
         .filterBounds(geom) \
-        .filterDate("2025-01-01", "2026-12-31")
+        .filterDate(start_date, datetime.utcnow().strftime("%Y-%m-%d"))
 
     size = collection.size().getInfo()
     print("🔥 COLLECTION SIZE:", size)
@@ -105,6 +111,15 @@ def ingest_radd_alerts_gfw(db: Session):
 
     initialize_ee()
 
+    last_date = get_last_radd_date(db)
+
+    if last_date:
+        start_date = (last_date + timedelta(days=1)).strftime("%Y-%m-%d")
+    else:
+        start_date = "2025-01-01"  # first run fallback
+
+    print("🚀 Fetching RADD from:", start_date)
+
     counties = db.execute(text("""
         SELECT name, ST_AsGeoJSON(geometry)
         FROM admin_county
@@ -119,7 +134,7 @@ def ingest_radd_alerts_gfw(db: Session):
 
         print(f"\n🔥 Processing county: {county_name}")
 
-        alerts = fetch_radd_alerts_gee(geojson)
+        alerts = fetch_radd_alerts_gee(geojson, start_date)
 
         if not alerts:
             print("⚠️ No alerts found")
@@ -204,6 +219,7 @@ TO INSERT: {len(batch)}
                 :confidence,
                 ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)
             )
+            ON CONFLICT (alert_date, geometry) DO NOTHING
         """), batch)
 
         db.commit()

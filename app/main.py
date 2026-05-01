@@ -7,15 +7,21 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware 
 from dotenv import load_dotenv
 load_dotenv()
+from app.jobs.radd_scheduler import start_scheduler
 from app.api.router import api_router
 from app.db.base import Base
 from app.db.session import engine
+
 
 app = FastAPI(
     title="Green Kenya API",
     description="Environmental Intelligence Platform for Kenya",
     version="1.0.0"
 )
+
+@app.on_event("startup")
+def start_jobs():
+    start_scheduler()
 
 # ADD CORS RIGHT HERE (VERY IMPORTANT POSITION)
 origins = [
