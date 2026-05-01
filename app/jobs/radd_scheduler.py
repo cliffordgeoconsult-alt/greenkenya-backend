@@ -10,11 +10,18 @@ from app.services.radd_gfw_service import ingest_radd_alerts_gfw
 LOCAL_DB = os.getenv("LOCAL_DATABASE_URL")
 RENDER_DB = os.getenv("DATABASE_URL")
 
-if not LOCAL_DB or not RENDER_DB:
-    raise ValueError("DATABASE_URL or LOCAL_DATABASE_URL not set")
+if not RENDER_DB:
+    raise ValueError("DATABASE_URL not set")
 
-LocalSession = sessionmaker(bind=create_engine(LOCAL_DB))
+# LOCAL DB is optional (only for local dev)
+if not LOCAL_DB:
+    print("⚠️ LOCAL_DATABASE_URL not set — skipping local ingestion")
+
 RenderSession = sessionmaker(bind=create_engine(RENDER_DB))
+
+LocalSession = None
+if LOCAL_DB:
+    LocalSession = sessionmaker(bind=create_engine(LOCAL_DB))
 
 scheduler = None
 
@@ -29,14 +36,14 @@ def run_radd_job():
     finally:
         render_db.close()
 
-    # Local
-    local_db = LocalSession()
-    try:
-        print("Local DB...")
-        ingest_radd_alerts_gfw(local_db)
-    finally:
-        local_db.close()
-
+    # Local (only if exists)
+    if LocalSession:
+        local_db = LocalSession()
+        try:
+            print("Local DB...")
+            ingest_radd_alerts_gfw(local_db)
+        finally:
+            local_db.close()
 
 def start_scheduler():
     global scheduler
