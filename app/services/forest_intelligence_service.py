@@ -616,7 +616,7 @@ def run_reserve_loss_analysis(db):
 
     results = []
 
-    for r in reserves[:2]:
+    for r in reserves:
 
         reserve_id = r[0]
         name = r[1]
@@ -768,7 +768,7 @@ def run_non_reserve_forest_analysis(db):
 
     results = []
 
-    for f in forests[:10]:
+    for f in forests:
 
         forest_id = f[0]
         forest_code = f[1]

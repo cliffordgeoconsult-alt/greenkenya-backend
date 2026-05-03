@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware 
 from dotenv import load_dotenv
 load_dotenv()
+from app.services.gee.ee_init import initialize_ee
 from app.jobs.radd_scheduler import start_scheduler
 from app.api.router import api_router
 from app.db.base import Base
@@ -21,6 +22,7 @@ app = FastAPI(
 
 @app.on_event("startup")
 def start_jobs():
+    initialize_ee()
     start_scheduler()
 
 # ADD CORS RIGHT HERE (VERY IMPORTANT POSITION)

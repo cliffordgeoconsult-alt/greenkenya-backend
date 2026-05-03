@@ -17,9 +17,37 @@ LOSS_LATEST_OFFICIAL_YEAR = 2024
 
 CURRENT_YEAR = datetime.utcnow().year
 CURRENT_OFFICIAL_YEAR = CURRENT_YEAR - 1
-# -----------------------------------
+
+# COUNTY FUNCTIONS  - Pulls county boundaries from admin_county table
+def fetch_county_by_id(db, county_id):
+    query = """
+    SELECT id, name, ST_AsGeoJSON(geometry) AS geojson
+    FROM admin_county
+    WHERE id = :county_id
+    """
+    return db.execute(text(query), {"county_id": county_id}).fetchone()
+
+# WARD FUNCTIONS - Pulls ward boundaries from admin_ward table
+# Note: Wards are the smallest admin unit with carbon stats, so loss trends are modelled at ward level and aggregated up to county and national levels.
+def fetch_ward_by_id(db, ward_id):
+    query = """
+    SELECT id, name, county_id, subcounty_id, ST_AsGeoJSON(geometry) AS geojson
+    FROM admin_ward
+    WHERE id = :ward_id
+    """
+    return db.execute(text(query), {"ward_id": ward_id}).fetchone()
+
+# RESERVE FUNCTIONS - Pulls reserve boundaries from forest_reserves table
+def fetch_reserve_by_id(db, reserve_id):
+    query = """
+    SELECT reserve_id, name, area_ha, ST_AsGeoJSON(geometry) AS geojson
+    FROM forest_reserves
+    WHERE reserve_id = :reserve_id
+    """
+    return db.execute(text(query), {"reserve_id": reserve_id}).fetchone()
+
 # GET ALL COUNTIES
-# -----------------------------------
+
 def fetch_counties(db):
     query = """
     SELECT
@@ -101,25 +129,31 @@ def build_entity_loss_trend(geom, density):
     return results
 
 def get_loss_biomass_image(year):
-    """
-    Biomass baseline nearest to selected loss year.
-    GEDI starts recent years, so old years fallback to 2020.
-    """
 
-    end_year = max(min(year, CURRENT_OFFICIAL_YEAR), 2020)
-    start_year = max(end_year - 1, 2020)
+    # Use GEDI for recent years
+    if year >= 2020:
+        start_year = year - 1
+        return (
+            ee.ImageCollection("LARSE/GEDI/GEDI04_A_002_MONTHLY")
+            .filterDate(f"{start_year}-01-01", f"{year}-12-31")
+            .select("agbd")
+            .median()
+        )
 
-    return (
-        ee.ImageCollection("LARSE/GEDI/GEDI04_A_002_MONTHLY")
-        .filterDate(f"{start_year}-01-01", f"{end_year}-12-31")
-        .select("agbd")
-        .median()
-    )
+    # Fallback for historical years (pre-GEDI)
+    # Use Hansen tree cover as proxy
+    hansen = ee.Image("UMD/hansen/global_forest_change_2024_v1_12")
+
+    treecover = hansen.select("treecover2000")
+
+    # Convert % canopy → approximate biomass
+    biomass_proxy = treecover.multiply(1.5)  # tuning factor
+
+    return biomass_proxy.rename("agbd")
 
 # COUNTY CARBON STATS
 def get_county_carbon_stats(db, year=None):
 
-    initialize_ee()
     if year is None:
         year = CURRENT_OFFICIAL_YEAR
 
@@ -147,7 +181,7 @@ def get_county_carbon_stats(db, year=None):
 
     results = []
 
-    for row in counties[:3]:   # test first
+    for row in counties:  
 
         geom = ee.Geometry(json.loads(row.geojson))
 
@@ -248,9 +282,100 @@ def get_county_carbon_stats(db, year=None):
 
     return results
 
-def get_county_loss_stats(db, year):
+def get_single_county_carbon(db, county_id, year=None):
 
-    initialize_ee()
+    if year is None:
+        year = CURRENT_OFFICIAL_YEAR
+
+    if year < CARBON_START_YEAR:
+        return {"error": f"County carbon stats begin at {CARBON_START_YEAR}"}
+
+    if year > CURRENT_OFFICIAL_YEAR:
+        return {
+            "error": f"{year} county carbon stats not yet available. Latest completed year is {CURRENT_OFFICIAL_YEAR}."
+        }
+
+    # 🔥 FETCH ONLY ONE COUNTY
+    row = fetch_county_by_id(db, county_id)
+
+    if not row:
+        return {"error": "County not found"}
+
+    geom = ee.Geometry(json.loads(row.geojson))
+
+    biomass_start = max(year - 1, 2020)
+
+    biomass_img = (
+        ee.ImageCollection("LARSE/GEDI/GEDI04_A_002_MONTHLY")
+        .filterDate(f"{biomass_start}-01-01", f"{year}-12-31")
+        .select("agbd")
+        .median()
+    )
+
+    dw = (
+        ee.ImageCollection("GOOGLE/DYNAMICWORLD/V1")
+        .filterDate(f"{year}-01-01", f"{year}-12-31")
+        .filterBounds(geom)
+    )
+
+    tree_prob = dw.select("trees").mean()
+
+    dense_forest = tree_prob.gte(0.6).rename("dense")
+    tree_cover = tree_prob.gte(0.3).rename("cover")
+
+    dense_area = dense_forest.multiply(
+        ee.Image.pixelArea()
+    ).reduceRegion(
+        reducer=ee.Reducer.sum(),
+        geometry=geom,
+        scale=10,
+        maxPixels=1e13
+    )
+
+    cover_area = tree_cover.multiply(
+        ee.Image.pixelArea()
+    ).reduceRegion(
+        reducer=ee.Reducer.sum(),
+        geometry=geom,
+        scale=10,
+        maxPixels=1e13
+    )
+
+    combined = ee.Dictionary({
+        "dense": dense_area.get("dense"),
+        "cover": cover_area.get("cover"),
+        "biomass": biomass_img.updateMask(dense_forest)
+            .multiply(ee.Image.pixelArea().divide(10000))
+            .reduceRegion(
+                reducer=ee.Reducer.sum(),
+                geometry=geom,
+                scale=25,
+                maxPixels=1e13
+            ).get("agbd")
+    }).getInfo()
+
+    dense_ha = combined.get("dense", 0) / 10000
+    cover_ha = combined.get("cover", 0) / 10000
+    biomass_tonnes = combined.get("biomass", 0)
+
+    carbon = biomass_tonnes * 0.47
+    co2e = carbon * 3.67
+
+    density = co2e / dense_ha if dense_ha > 0 else 0
+
+    return {
+        "county_id": row.id,
+        "county": row.name,
+        "year": year,
+        "dense_forest_ha": round(dense_ha, 2),
+        "tree_cover_ha": round(cover_ha, 2),
+        "biomass_tonnes": round(biomass_tonnes, 2),
+        "carbon_tonnes": round(carbon, 2),
+        "co2e_tonnes": round(co2e, 2),
+        "carbon_density_tco2e_ha": round(density, 2)
+    }
+
+def get_county_loss_stats(db, year):
 
     if year is None:
         year = LOSS_LATEST_OFFICIAL_YEAR
@@ -274,7 +399,7 @@ def get_county_loss_stats(db, year):
 
     results = []
 
-    for row in counties[:3]:   # test first
+    for row in counties:  
 
         geom = ee.Geometry(json.loads(row.geojson))
 
@@ -332,43 +457,135 @@ def get_county_loss_stats(db, year):
 
     return results
 
+def get_single_county_loss(db, county_id, year):
+
+    if year is None:
+        year = LOSS_LATEST_OFFICIAL_YEAR
+
+    if year < LOSS_START_YEAR:
+        return {"error": f"Loss data begins at {LOSS_START_YEAR}"}
+
+    if year > LOSS_LATEST_OFFICIAL_YEAR:
+        return {
+            "year": year,
+            "status": "currently unavailable",
+            "message": f"Official annual forest-loss data for {year} is not yet available.",
+            "latest_available_year": LOSS_LATEST_OFFICIAL_YEAR
+        }
+
+    # 🔥 FETCH ONLY ONE COUNTY
+    row = fetch_county_by_id(db, county_id)
+
+    if not row:
+        return {"error": "County not found"}
+
+    geom = ee.Geometry(json.loads(row.geojson))
+
+    biomass_img = get_loss_biomass_image(year)
+
+    # -----------------------------------
+    # Forest loss area
+    # -----------------------------------
+    loss_stats = county_loss_per_year(geom, year).getInfo()
+
+    loss_m2 = list(loss_stats.values())[0] if loss_stats else 0
+    loss_ha = loss_m2 / 10000
+
+    hansen = ee.Image("UMD/hansen/global_forest_change_2024_v1_12")
+    lossyear = hansen.select("lossyear")
+
+    forest2000 = hansen.select("treecover2000").gte(30)
+
+    previous_loss = lossyear.gt(0).And(lossyear.lt(year - 2000))
+    forest_remaining = forest2000.updateMask(previous_loss.Not())
+
+    loss_mask = lossyear.eq(year - 2000).And(forest_remaining)
+
+    pixel_area_ha = ee.Image.pixelArea().divide(10000)
+
+    biomass_per_pixel = biomass_img.updateMask(loss_mask).multiply(pixel_area_ha)
+
+    biomass = biomass_per_pixel.reduceRegion(
+        reducer=ee.Reducer.sum(),
+        geometry=geom,
+        scale=25,
+        maxPixels=1e13
+    )
+
+    biomass_lost = biomass.getInfo().get("agbd", 0)
+
+    carbon_lost = biomass_lost * 0.47
+    co2e_emitted = carbon_lost * 3.67
+
+    return {
+        "county_id": row.id,
+        "county": row.name,
+        "year": year,
+        "loss_ha": round(loss_ha, 2),
+        "biomass_lost_tonnes": round(biomass_lost, 2),
+        "carbon_lost_tonnes": round(carbon_lost, 2),
+        "co2e_emitted_tonnes": round(co2e_emitted, 2)
+    }
+
 def get_county_loss_trend(db, county_id):
 
-    initialize_ee()
+    row = fetch_county_by_id(db, county_id)
 
-    counties = fetch_counties(db)
+    if not row:
+        return {"error": "County not found"}
 
     density_lookup = build_county_density_lookup(db)
 
-    for row in counties:
-        if str(row.id) == str(county_id):
+    geom = ee.Geometry(json.loads(row.geojson))
 
-            geom = ee.Geometry(json.loads(row.geojson))
+    density = density_lookup.get(row.name.upper())
 
-            density = density_lookup.get(row.name.upper(), 35)
+    if density is None:
+        density = get_default_density(db)
 
-            return {
-                "county_id": str(row.id),
-                "county": row.name,
-                "trend": build_entity_loss_trend(geom, density)
-            }
+    return {
+        "county_id": str(row.id),
+        "county": row.name,
+        "trend": build_entity_loss_trend(geom, density)
+    }                           
 
-    return {"error": "County not found"}
 
-def build_county_density_lookup(db):
-    stats = get_county_carbon_stats(db)
+def build_county_density_lookup(db, year=None):
+
+    if year is None:
+        year = CURRENT_OFFICIAL_YEAR
+
+    result = db.execute("""
+        SELECT name, carbon_density
+        FROM carbon_stats
+        WHERE entity_type = 'county'
+        AND year = :year
+    """, {"year": year})
 
     lookup = {}
 
-    for row in stats:
-        lookup[row["county"].upper()] = row["carbon_density_tco2e_ha"]
+    for row in result:
+        lookup[row.name.upper()] = row.carbon_density
 
     return lookup
 
+def get_default_density(db, year=None):
+    if year is None:
+        year = CURRENT_OFFICIAL_YEAR
+
+    result = db.execute("""
+        SELECT AVG(carbon_density) as avg_density
+        FROM carbon_stats
+        WHERE entity_type = 'county'
+        AND year = :year
+        AND carbon_density > 0
+    """, {"year": year})
+
+    row = result.fetchone()
+
+    return row.avg_density if row and row.avg_density else 0
 
 def get_ward_carbon_stats(db, year=None):
-
-    initialize_ee()
 
     if year is None:
         year = CURRENT_OFFICIAL_YEAR
@@ -386,7 +603,7 @@ def get_ward_carbon_stats(db, year=None):
 
     results = []
 
-    for row in wards[:25]:   # dev speed
+    for row in wards:   
 
         geom = ee.Geometry(json.loads(row.geojson))
 
@@ -457,9 +674,87 @@ def get_ward_carbon_stats(db, year=None):
 
     return results
 
-def get_ward_loss_stats(db, year):
+def get_single_ward_carbon(db, ward_id, year=None):
 
-    initialize_ee()
+    if year is None:
+        year = CURRENT_OFFICIAL_YEAR
+
+    row = fetch_ward_by_id(db, ward_id)
+
+    if not row:
+        return {"error": "Ward not found"}
+
+    geom = ee.Geometry(json.loads(row.geojson))
+
+    biomass_start = max(year - 1, 2020)
+
+    biomass_img = (
+        ee.ImageCollection("LARSE/GEDI/GEDI04_A_002_MONTHLY")
+        .filterDate(f"{biomass_start}-01-01", f"{year}-12-31")
+        .select("agbd")
+        .median()
+    )
+
+    dw = (
+        ee.ImageCollection("GOOGLE/DYNAMICWORLD/V1")
+        .filterDate(f"{year}-01-01", f"{year}-12-31")
+        .filterBounds(geom)
+    )
+
+    tree_prob = dw.select("trees").mean()
+
+    dense = tree_prob.gte(0.6).rename("dense")
+    cover = tree_prob.gte(0.3).rename("cover")
+
+    dense_area = dense.multiply(ee.Image.pixelArea()).reduceRegion(
+        reducer=ee.Reducer.sum(),
+        geometry=geom,
+        scale=10,
+        maxPixels=1e13
+    )
+
+    cover_area = cover.multiply(ee.Image.pixelArea()).reduceRegion(
+        reducer=ee.Reducer.sum(),
+        geometry=geom,
+        scale=10,
+        maxPixels=1e13
+    )
+
+    combined = ee.Dictionary({
+        "dense": dense_area.get("dense"),
+        "cover": cover_area.get("cover"),
+        "biomass": biomass_img.updateMask(dense)
+            .multiply(ee.Image.pixelArea().divide(10000))
+            .reduceRegion(
+                reducer=ee.Reducer.sum(),
+                geometry=geom,
+                scale=25,
+                maxPixels=1e13
+            ).get("agbd")
+    }).getInfo()
+
+    dense_ha = combined.get("dense", 0) / 10000
+    cover_ha = combined.get("cover", 0) / 10000
+    biomass_tonnes = combined.get("biomass", 0)
+
+    carbon = biomass_tonnes * 0.47
+    co2e = carbon * 3.67
+
+    density = co2e / dense_ha if dense_ha > 0 else 0
+
+    return {
+        "ward_id": str(row.id),
+        "ward": row.name,
+        "year": year,
+        "dense_forest_ha": round(dense_ha, 2),
+        "tree_cover_ha": round(cover_ha, 2),
+        "biomass_tonnes": round(biomass_tonnes, 2),
+        "carbon_tonnes": round(carbon, 2),
+        "co2e_tonnes": round(co2e, 2),
+        "carbon_density_tco2e_ha": round(density, 2)
+    }
+
+def get_ward_loss_stats(db, year):
 
     if year is None:
         year = LOSS_LATEST_OFFICIAL_YEAR
@@ -470,7 +765,7 @@ def get_ward_loss_stats(db, year):
 
     results = []
 
-    for row in wards[:25]:
+    for row in wards:   
 
         geom = ee.Geometry(json.loads(row.geojson))
 
@@ -520,27 +815,97 @@ def get_ward_loss_stats(db, year):
 
     return results
 
+def get_single_ward_loss(db, ward_id, year):
+
+    if year is None:
+        year = LOSS_LATEST_OFFICIAL_YEAR
+
+    if year < LOSS_START_YEAR:
+        return {"error": f"Loss data begins at {LOSS_START_YEAR}"}
+
+    if year > LOSS_LATEST_OFFICIAL_YEAR:
+        return {
+            "ward_id": ward_id,
+            "year": year,
+            "status": "unavailable",
+            "message": f"Official forest loss data for {year} is not yet released.",
+            "latest_available_year": LOSS_LATEST_OFFICIAL_YEAR
+        }
+
+    row = fetch_ward_by_id(db, ward_id)
+
+    if not row:
+        return {"error": "Ward not found"}
+
+    geom = ee.Geometry(json.loads(row.geojson))
+
+    biomass_img = get_loss_biomass_image(year)
+
+    loss_stats = county_loss_per_year(geom, year).getInfo()
+
+    loss_m2 = list(loss_stats.values())[0] if loss_stats else 0
+    loss_ha = loss_m2 / 10000
+
+    hansen = ee.Image("UMD/hansen/global_forest_change_2024_v1_12")
+    lossyear = hansen.select("lossyear")
+
+    forest2000 = hansen.select("treecover2000").gte(30)
+
+    previous_loss = lossyear.gt(0).And(lossyear.lt(year - 2000))
+    remaining = forest2000.updateMask(previous_loss.Not())
+
+    loss_mask = lossyear.eq(year - 2000).And(remaining)
+
+    biomass = biomass_img.updateMask(loss_mask).multiply(
+        ee.Image.pixelArea().divide(10000)
+    ).reduceRegion(
+        reducer=ee.Reducer.sum(),
+        geometry=geom,
+        scale=25,
+        maxPixels=1e13
+    )
+
+    biomass_lost = biomass.getInfo().get("agbd", 0)
+
+    carbon = biomass_lost * 0.47
+    co2e = carbon * 3.67
+
+    return {
+        "ward_id": str(row.id),
+        "ward": row.name,
+        "year": year,
+        "loss_ha": round(loss_ha, 2),
+        "biomass_lost_tonnes": round(biomass_lost, 2),
+        "carbon_lost_tonnes": round(carbon, 2),
+        "co2e_emitted_tonnes": round(co2e, 2)
+    }
+
 def get_ward_loss_trend(db, ward_id):
 
-    wards = fetch_wards(db)
+    row = fetch_ward_by_id(db, ward_id)
 
-    for row in wards:
-        if str(row.id) == str(ward_id):
+    if not row:
+        return {"error": "Ward not found"}
 
-            geom = ee.Geometry(json.loads(row.geojson))
+    geom = ee.Geometry(json.loads(row.geojson))
 
-            return {
-                "ward_id": str(row.id),
-                "ward": row.name,
-                "trend": build_entity_loss_trend(geom, 35)
-            }
+    density_lookup = build_county_density_lookup(db)
 
-    return {"error": "Ward not found"}
+    # use parent county density
+    density = density_lookup.get(row.county_id)
+
+    if density is None:
+        density = get_default_density(db)
+
+    return {
+        "ward_id": str(row.id),
+        "ward": row.name,
+        "trend": build_entity_loss_trend(geom, density)
+    }
+
 
 # RESERVE CARBON STATS
 def get_reserve_carbon_stats(db, year=None):
-
-    initialize_ee()
 
     if year is None:
         year = CURRENT_OFFICIAL_YEAR
@@ -568,7 +933,7 @@ def get_reserve_carbon_stats(db, year=None):
 
     results = []
 
-    for row in reserves[:20]:   # dev mode fast load
+    for row in reserves:  
 
         geom = ee.Geometry(json.loads(row.geojson))
 
@@ -649,10 +1014,96 @@ def get_reserve_carbon_stats(db, year=None):
 
     return results
 
+def get_single_reserve_carbon(db, reserve_id, year=None):
+
+    if year is None:
+        year = CURRENT_OFFICIAL_YEAR
+
+    if year < CARBON_START_YEAR:
+        return {"error": f"Reserve carbon stats begin at {CARBON_START_YEAR}"}
+
+    if year > CURRENT_OFFICIAL_YEAR:
+        return {
+            "error": f"{year} reserve carbon stats not yet available."
+        }
+
+    row = fetch_reserve_by_id(db, reserve_id)
+
+    if not row:
+        return {"error": "Reserve not found"}
+
+    geom = ee.Geometry(json.loads(row.geojson))
+
+    biomass_start = max(year - 1, 2020)
+
+    biomass_img = (
+        ee.ImageCollection("LARSE/GEDI/GEDI04_A_002_MONTHLY")
+        .filterDate(f"{biomass_start}-01-01", f"{year}-12-31")
+        .select("agbd")
+        .median()
+    )
+
+    dw = (
+        ee.ImageCollection("GOOGLE/DYNAMICWORLD/V1")
+        .filterDate(f"{year}-01-01", f"{year}-12-31")
+        .filterBounds(geom)
+    )
+
+    tree_prob = dw.select("trees").mean()
+
+    dense = tree_prob.gte(0.6).rename("dense")
+    cover = tree_prob.gte(0.3).rename("cover")
+
+    dense_area = dense.multiply(ee.Image.pixelArea()).reduceRegion(
+        reducer=ee.Reducer.sum(),
+        geometry=geom,
+        scale=10,
+        maxPixels=1e13
+    )
+
+    cover_area = cover.multiply(ee.Image.pixelArea()).reduceRegion(
+        reducer=ee.Reducer.sum(),
+        geometry=geom,
+        scale=10,
+        maxPixels=1e13
+    )
+
+    combined = ee.Dictionary({
+        "dense": dense_area.get("dense"),
+        "cover": cover_area.get("cover"),
+        "biomass": biomass_img.updateMask(dense)
+            .multiply(ee.Image.pixelArea().divide(10000))
+            .reduceRegion(
+                reducer=ee.Reducer.sum(),
+                geometry=geom,
+                scale=25,
+                maxPixels=1e13
+            ).get("agbd")
+    }).getInfo()
+
+    dense_ha = combined.get("dense", 0) / 10000
+    cover_ha = combined.get("cover", 0) / 10000
+    biomass_tonnes = combined.get("biomass", 0)
+
+    carbon = biomass_tonnes * 0.47
+    co2e = carbon * 3.67
+
+    density = co2e / dense_ha if dense_ha > 0 else 0
+
+    return {
+        "reserve_id": str(row.reserve_id),
+        "reserve": row.name,
+        "year": year,
+        "dense_forest_ha": round(dense_ha, 2),
+        "tree_cover_ha": round(cover_ha, 2),
+        "biomass_tonnes": round(biomass_tonnes, 2),
+        "carbon_tonnes": round(carbon, 2),
+        "co2e_tonnes": round(co2e, 2),
+        "carbon_density_tco2e_ha": round(density, 2)
+    }
+
 # RESERVE LOSS STATS
 def get_reserve_loss_stats(db, year):
-
-    initialize_ee()
 
     if year is None:
         year = LOSS_LATEST_OFFICIAL_YEAR
@@ -676,7 +1127,7 @@ def get_reserve_loss_stats(db, year):
 
     results = []
 
-    for row in reserves[:20]:   # dev mode speed
+    for row in reserves:  
 
         geom = ee.Geometry(json.loads(row.geojson))
 
@@ -733,31 +1184,110 @@ def get_reserve_loss_stats(db, year):
 
     return results
 
+def get_single_reserve_loss(db, reserve_id, year):
+
+    if year is None:
+        year = LOSS_LATEST_OFFICIAL_YEAR
+
+    if year < LOSS_START_YEAR:
+        return {"error": f"Loss data begins at {LOSS_START_YEAR}"}
+
+    if year > LOSS_LATEST_OFFICIAL_YEAR:
+        return {
+            "reserve_id": reserve_id,
+            "year": year,
+            "status": "unavailable",
+            "message": f"Official forest loss data for {year} is not yet released.",
+            "latest_available_year": LOSS_LATEST_OFFICIAL_YEAR
+        }
+
+    if year < LOSS_START_YEAR:
+        return {"error": f"Loss data begins at {LOSS_START_YEAR}"}
+
+    if year > LOSS_LATEST_OFFICIAL_YEAR:
+        return {
+            "year": year,
+            "status": "currently unavailable",
+            "latest_available_year": LOSS_LATEST_OFFICIAL_YEAR
+        }
+
+    row = fetch_reserve_by_id(db, reserve_id)
+
+    if not row:
+        return {"error": "Reserve not found"}
+
+    geom = ee.Geometry(json.loads(row.geojson))
+
+    biomass_img = get_loss_biomass_image(year)
+
+    loss_stats = county_loss_per_year(geom, year).getInfo()
+
+    loss_m2 = list(loss_stats.values())[0] if loss_stats else 0
+    loss_ha = loss_m2 / 10000
+
+    hansen = ee.Image("UMD/hansen/global_forest_change_2024_v1_12")
+    lossyear = hansen.select("lossyear")
+
+    forest2000 = hansen.select("treecover2000").gte(30)
+
+    previous_loss = lossyear.gt(0).And(lossyear.lt(year - 2000))
+    remaining = forest2000.updateMask(previous_loss.Not())
+
+    loss_mask = lossyear.eq(year - 2000).And(remaining)
+
+    biomass = biomass_img.updateMask(loss_mask).multiply(
+        ee.Image.pixelArea().divide(10000)
+    ).reduceRegion(
+        reducer=ee.Reducer.sum(),
+        geometry=geom,
+        scale=25,
+        maxPixels=1e13
+    )
+
+    biomass_lost = biomass.getInfo().get("agbd", 0)
+
+    carbon = biomass_lost * 0.47
+    co2e = carbon * 3.67
+
+    return {
+        "reserve_id": str(row.reserve_id),
+        "reserve": row.name,
+        "year": year,
+        "loss_ha": round(loss_ha, 2),
+        "biomass_lost_tonnes": round(biomass_lost, 2),
+        "carbon_lost_tonnes": round(carbon, 2),
+        "co2e_emitted_tonnes": round(co2e, 2)
+    }
+
 def get_reserve_loss_trend(db, reserve_id):
 
-    initialize_ee()
+    row = fetch_reserve_by_id(db, reserve_id)
 
-    reserves = fetch_reserves(db)
+    if not row:
+        return {"error": "Reserve not found"}
 
-    for row in reserves:
-        if str(row.reserve_id) == str(reserve_id):
+    geom = ee.Geometry(json.loads(row.geojson))
 
-            geom = ee.Geometry(json.loads(row.geojson))
+    # use current reserve carbon density
+    density_lookup = build_county_density_lookup(db)
 
-            # use current reserve carbon density
-            density = 35
+    # fallback to national avg (reserves don’t map cleanly to counties yet)
+    density = get_default_density(db)
 
-            return {
-                "reserve_id": str(row.reserve_id),
-                "reserve": row.name,
-                "trend": build_entity_loss_trend(geom, density)
-            }
+    return {
+        "reserve_id": str(row.reserve_id),
+        "reserve": row.name,
+        "trend": build_entity_loss_trend(geom, density)
+    }
 
-    return {"error": "Reserve not found"}
+    return {
+        "reserve_id": str(row.reserve_id),
+        "reserve": row.name,
+        "trend": build_entity_loss_trend(geom, density)
+    }
+
 
 def get_national_loss_trend(db):
-
-    initialize_ee()
 
     counties = fetch_counties(db)
 
@@ -769,12 +1299,15 @@ def get_national_loss_trend(db):
     cumulative_ha = 0
     cumulative_co2e = 0
 
-    for county in counties[:3]:   # test first
+    for county in counties:   
 
         county_name = county.name.upper()
         geom = ee.Geometry(json.loads(county.geojson))
 
-        density = density_lookup.get(county_name, 35)
+        density = density_lookup.get(county_name)
+
+        if density is None:
+            density = get_default_density(db)
 
         stats = get_loss_histogram(geom)
         yearly = build_yearly_loss(stats)
@@ -814,7 +1347,6 @@ def get_national_loss_trend(db):
 
 def get_national_carbon_map(year=None):
 
-    initialize_ee()
     if year is None:
         year = CURRENT_OFFICIAL_YEAR
 

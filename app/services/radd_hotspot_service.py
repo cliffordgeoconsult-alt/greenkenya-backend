@@ -89,10 +89,11 @@ def generate_radd_hotspots(db, days=3650):
 
         alerts_count = h[1]
 
-        # severity
-        if alerts_count >= 30:
+        if alerts_count >= 50:
+            severity = "confirmed"
+        elif alerts_count >= 20:
             severity = "high"
-        elif alerts_count >= 10:
+        elif alerts_count >= 5:
             severity = "medium"
         else:
             severity = "low"

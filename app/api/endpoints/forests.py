@@ -22,6 +22,7 @@ from app.services.radd_gfw_service import ingest_radd_alerts_gfw
 from app.services.radd_hotspot_service import generate_radd_hotspots
 from app.services.reserve_loader_service import load_forest_reserves
 from app.services.reserve_analysis_service import compute_reserve_forests
+from app.services.alert_engine import get_alerts
 
 from geoalchemy2.shape import to_shape
 
@@ -252,3 +253,11 @@ def get_forest_coverage_tile(
         "year": year,
         "tile_url": tile_url
     }
+
+@router.get("/alerts")
+def alerts(
+    level: str = None,
+    entity_id: str = None,
+    db: Session = Depends(get_db)
+):
+    return get_alerts(db, level, entity_id)

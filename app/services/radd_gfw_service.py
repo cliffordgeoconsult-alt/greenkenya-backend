@@ -186,8 +186,8 @@ def ingest_radd_alerts_gfw(db: Session):
                     skipped_date += 1
                     continue
                 loss_ha = None
-                is_confirmed = str(int(conf)).startswith('3')
-                actual_confidence = 0.98 if is_confirmed else 0.85
+                # keep raw sensor confidence only
+                actual_confidence = float(conf) if conf else 2
 
                 batch.append({
                     "id": str(uuid.uuid4()),
