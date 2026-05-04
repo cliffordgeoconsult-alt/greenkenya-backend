@@ -97,12 +97,36 @@ def run_carbon_precompute(year: int):
     initialize_ee()
 
     try:
-        counties = fetch_counties(db)
-        wards = fetch_wards(db)
+        TARGET_COUNTIES = [
+            "NAIROBI",
+            "NAKURU",
+            "MOMBASA",
+            "KISUMU",
+            "NYERI",
+            "NAROK",
+            "TAITA TAVETA",
+            "TANA RIVER",
+            "KISII"
+        ]
+
+        all_counties = fetch_counties(db)
+
+        counties = [
+            c for c in all_counties
+            if c.name.upper() in TARGET_COUNTIES
+        ]
+        all_wards = fetch_wards(db)
+
+        county_ids = {c.id for c in counties}
+
+        wards = [
+            w for w in all_wards
+            if w.county_id in county_ids
+        ]
         reserves = fetch_reserves(db)
 
         def process_county(county):
-            print(f"⏳ County starting: {county.name}")
+            print(f"⏳ [{year}] County: {county.name}")
             local_db = SessionLocal()
             try:
                 carbon = get_single_county_carbon(local_db, str(county.id), year)
@@ -120,7 +144,7 @@ def run_carbon_precompute(year: int):
                 local_db.close()
 
         def process_ward(ward):
-            print(f"⏳ Ward starting: {ward.name}")
+            print(f"⏳ [{year}] Ward: {ward.name}")
             local_db = SessionLocal()
             try:
                 carbon = get_single_ward_carbon(local_db, str(ward.id), year)
@@ -138,7 +162,7 @@ def run_carbon_precompute(year: int):
                 local_db.close()
 
         def process_reserve(reserve):
-            print(f"⏳ Reserve starting: {reserve.name}")
+            print(f"⏳ [{year}] Reserve: {reserve.name}")
             local_db = SessionLocal()
             try:
                 carbon = get_single_reserve_carbon(local_db, str(reserve.reserve_id), year)
@@ -176,14 +200,159 @@ def run_carbon_precompute(year: int):
             elif kind == "reserve":
                 process_reserve(obj)
 
-        with ThreadPoolExecutor(max_workers=10) as executor:
+        with ThreadPoolExecutor(max_workers=3) as executor:
             executor.map(process, tasks)
 
         print("🔥 ALL AOIs carbon precompute done")
 
     finally:
         db.close()
+
+def run_loss_only_precompute(year: int):
+    db: Session = SessionLocal()
+    print(f"🔥 STARTING LOSS-ONLY JOB {year}")
+
+    initialize_ee()
+
+    try:
+        TARGET_COUNTIES = [
+            "NAIROBI",
+            "NAKURU",
+            "MOMBASA",
+            "KISUMU",
+            "NYERI",
+            "NAROK",
+            "TAITA TAVETA",
+            "TANA RIVER",
+            "KISII"
+        ]
+
+        all_counties = fetch_counties(db)
+
+        counties = [
+            c for c in all_counties
+            if c.name.upper() in TARGET_COUNTIES
+        ]
+
+        all_wards = fetch_wards(db)
+        county_ids = {c.id for c in counties}
+
+        wards = [
+            w for w in all_wards
+            if w.county_id in county_ids
+        ]
+
+        reserves = fetch_reserves(db)
+
+        def process_county(county):
+            print(f"⏳ [{year}] County: {county.name}")
+            local_db = SessionLocal()
+            try:
+                loss = get_single_county_loss(local_db, str(county.id), year)
+
+                if "error" not in loss:
+                    save_loss(local_db, "county", str(county.id), county.name, year, loss)
+
+                local_db.commit()
+            finally:
+                local_db.close()
+
+        def process_ward(ward):
+            local_db = SessionLocal()
+            try:
+                loss = get_single_ward_loss(local_db, str(ward.id), year)
+
+                if "error" not in loss:
+                    save_loss(local_db, "ward", str(ward.id), ward.name, year, loss)
+
+                local_db.commit()
+            finally:
+                local_db.close()
+
+        def process_reserve(reserve):
+            local_db = SessionLocal()
+            try:
+                loss = get_single_reserve_loss(local_db, str(reserve.reserve_id), year)
+
+                if "error" not in loss:
+                    save_loss(local_db, "reserve", str(reserve.reserve_id), reserve.name, year, loss)
+
+                local_db.commit()
+            finally:
+                local_db.close()
+
+        tasks = []
+
+        for c in counties:
+            tasks.append(("county", c))
+        for w in wards:
+            tasks.append(("ward", w))
+        for r in reserves:
+            tasks.append(("reserve", r))
+
+        def process(task):
+            kind, obj = task
+
+            if kind == "county":
+                process_county(obj)
+            elif kind == "ward":
+                process_ward(obj)
+            elif kind == "reserve":
+                process_reserve(obj)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            executor.map(process, tasks)
+
+        print(f"🔥 LOSS-ONLY DONE {year}")
+
+    finally:
+        db.close()
+
+def get_last_completed_year(db, table, entity_type):
+    result = db.execute(
+        text(f"""
+            SELECT MAX(year) as max_year
+            FROM {table}
+            WHERE entity_type = :entity_type
+        """),
+        {"entity_type": entity_type}
+    )
+
+    row = result.fetchone()
+    return row.max_year if row and row.max_year else None
+
 if __name__ == "__main__":
-    year = datetime.now(UTC).year - 1
-    print(f"🚀 Running carbon precompute for year {year}")
-    run_carbon_precompute(year)
+    from app.services.carbon_service import (
+        CARBON_START_YEAR,
+        LOSS_START_YEAR,
+        CURRENT_OFFICIAL_YEAR
+    )
+
+    db = SessionLocal()
+
+    try:
+        # 🔍 CHECK LAST COMPLETED YEARS
+        last_loss_year = get_last_completed_year(db, "loss_stats", "county")
+        last_carbon_year = get_last_completed_year(db, "carbon_stats", "county")
+
+        print(f"📊 Last loss year in DB: {last_loss_year}")
+        print(f"📊 Last carbon year in DB: {last_carbon_year}")
+
+        # 🔥 1. LOSS HISTORY (resume)
+        start_loss_year = (last_loss_year + 1) if last_loss_year else LOSS_START_YEAR
+
+        for year in range(start_loss_year, CARBON_START_YEAR):
+            print(f"\n▶ Resuming LOSS precompute for year {year}")
+            run_loss_only_precompute(year)
+
+        # 🔥 2. CARBON + LOSS (resume)
+        start_carbon_year = (
+            max(CARBON_START_YEAR, (last_carbon_year + 1) if last_carbon_year else CARBON_START_YEAR)
+        )
+
+        for year in range(start_carbon_year, CURRENT_OFFICIAL_YEAR + 1):
+            print(f"\n▶ Resuming CARBON + LOSS precompute for year {year}")
+            run_carbon_precompute(year)
+
+    finally:
+        db.close()
