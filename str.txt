@@ -67,7 +67,7 @@ C:.
 �   �           
 �   +---jobs
 �   �   �   radd_scheduler.py
-�   �   �   
+�   �   �   carbon_precompute.py
 �   �   +---__pycache__
 �   �           radd_scheduler.cpython-313.pyc
 �   �           
