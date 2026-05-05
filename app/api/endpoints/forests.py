@@ -1,6 +1,7 @@
 # app/api/endpoints/forests.py
 import json
 import ee
+import time
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -283,6 +284,7 @@ def prewarm_all(db: Session = Depends(get_db)):
     for c in counties:
         print(f"🌍 Prewarming county: {c['name']}")
         run_vegetation_analysis(db, "county", c["id"])
+        time.sleep(2)
 
     # -------------------------
     # WARDS
@@ -316,3 +318,38 @@ def prewarm_all(db: Session = Depends(get_db)):
         "wards": len(wards),
         "subcounties": len(subs)
     }
+
+@router.get("/prewarm/start")
+def start_prewarm(db: Session = Depends(get_db)):
+
+    from app.services.admin_service import get_counties, get_wards, get_subcounties
+    from app.tasks.prewarm_tasks import (
+        prewarm_county,
+        prewarm_ward,
+        prewarm_subcounty,
+        prewarm_reserves
+    )
+
+    TARGET_COUNTIES = [
+        "NAIROBI", "NAKURU", "KISUMU",
+        "MOMBASA", "KISII", "NYERI",
+        "TANA RIVER", "TAITA TAVETA", "NAROK"
+    ]
+
+    counties = [
+        c for c in get_counties(db)
+        if c["name"].upper() in TARGET_COUNTIES
+    ]
+
+    for c in counties:
+        prewarm_county.delay(c["id"])
+
+    for w in get_wards(db):
+        prewarm_ward.delay(w["id"])
+
+    for s in get_subcounties(db):
+        prewarm_subcounty.delay(s["id"])
+
+    prewarm_reserves.delay()
+
+    return {"status": "prewarm started in background"}

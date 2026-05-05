@@ -47,6 +47,24 @@ def get_true_forest_mask():
 
     return baseline.updateMask(connected.gte(55))
 
+def safe_reduce_region(image, geometry, scale=30, retries=3):
+    import time
+
+    for i in range(retries):
+        try:
+            return image.reduceRegion(
+                reducer=ee.Reducer.sum(),
+                geometry=geometry,
+                scale=scale,
+                maxPixels=1e13
+            ).getInfo()
+        except Exception as e:
+            print(f"⚠️ EE retry {i+1}: {e}")
+            time.sleep(5)
+
+    print("❌ EE FAILED AFTER RETRIES")
+    return {}
+
 @redis_cache("tree_cover", ttl=86400)
 def county_tree_cover_area(county_geometry):
     hansen = ee.Image("UMD/hansen/global_forest_change_2024_v1_12")
@@ -340,12 +358,7 @@ def calculate_dw_transition(geometry, start_year=2020, end_year=2025):
     # 🔥 FINAL SAFE VERSION (NO IF, NO CRASH)
     regrowth_area = regrowth.multiply(pixel_area).unmask(0)
 
-    stats = regrowth_area.reduceRegion(
-        reducer=ee.Reducer.sum(),
-        geometry=geometry,
-        scale=10,
-        maxPixels=1e13
-    ).getInfo()
+    stats = safe_reduce_region(regrowth_area, geometry, scale=30)
 
     regrowth_ha = round((list(stats.values())[0] if stats else 0) / 10000, 2)
 
@@ -422,7 +435,10 @@ def calculate_yearly_coverage(geometry, county_name=None, start_year=2020, end_y
             .filterDate(start_date, end_date)
         )
 
-        count = dw.size().getInfo()
+        try:
+            count = dw.size().getInfo()
+        except:
+            count = 0
 
         if count == 0:
             results.append({
@@ -470,19 +486,8 @@ def calculate_yearly_coverage(geometry, county_name=None, start_year=2020, end_y
         # -------------------------
         # AREA
         # -------------------------
-        dense_stats = dense.multiply(pixel_area).reduceRegion(
-            reducer=ee.Reducer.sum(),
-            geometry=geometry,
-            scale=10,
-            maxPixels=1e13
-        ).getInfo()
-
-        cover_stats = cover.multiply(pixel_area).reduceRegion(
-            reducer=ee.Reducer.sum(),
-            geometry=geometry,
-            scale=10,
-            maxPixels=1e13
-        ).getInfo()
+        dense_stats = safe_reduce_region(dense, geometry, scale=30)
+        cover_stats = safe_reduce_region(cover, geometry, scale=30)
 
         dense_area = (list(dense_stats.values())[0] if dense_stats else 0) / 10000
         cover_area = (list(cover_stats.values())[0] if cover_stats else 0) / 10000
