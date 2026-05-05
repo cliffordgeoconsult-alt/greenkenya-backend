@@ -326,7 +326,6 @@ def start_prewarm(db: Session = Depends(get_db)):
     from app.tasks.prewarm_tasks import (
         prewarm_county,
         prewarm_ward,
-        prewarm_subcounty,
         prewarm_reserves
     )
 
@@ -350,9 +349,6 @@ def start_prewarm(db: Session = Depends(get_db)):
 
     for w in wards:
         prewarm_ward.delay(w["id"])
-
-    for s in get_subcounties(db):
-        prewarm_subcounty.delay(s["id"])
 
     prewarm_reserves.delay()
 
