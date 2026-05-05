@@ -80,18 +80,18 @@ def process_county_cached(county, geojson, db):
 
     ee_geom = ee.Geometry(geojson)
 
-    tree30_stats, tree50_stats = county_tree_cover_area(ee_geom)
-    forest_stats = county_forest_area(ee_geom)
+    tree_data = county_tree_cover_area(ee_geom)
+    forest_data = county_forest_area(ee_geom)
 
-    tree30 = tree30_stats.getInfo().get("treecover2000", 0)
-    tree50 = tree50_stats.getInfo().get("treecover2000", 0)
-    forest_m2 = forest_stats.getInfo().get("treecover2000", 0)
+    tree30 = tree_data["tree30"]
+    tree50 = tree_data["tree50"]
+    forest_m2 = forest_data["forest_m2"]
 
     stats = get_loss_histogram(ee_geom)
     yearly_data = build_yearly_loss(stats)
 
-    gain_stats = get_forest_gain_total(ee_geom)
-    gain_m2 = gain_stats.getInfo().get("gain", 0)
+    gain_data = get_forest_gain_total(ee_geom)
+    gain_m2 = gain_data["gain"]
 
     dw = calculate_dw_transition(ee_geom, 2020, 2025)
 
@@ -141,12 +141,12 @@ def run_vegetation_analysis(db, level=None, entity_id=None):
         radd_monthly = cached_radd_monthly(db, json.dumps(geojson, sort_keys=True))
 
         # 2. HANSEN BASELINE (Historical)
-        tree30_stats, tree50_stats = county_tree_cover_area(ee_geom)
-        forest_stats = county_forest_area(ee_geom)
+        tree_data = county_tree_cover_area(ee_geom)
+        forest_data = county_forest_area(ee_geom)
 
-        tree30 = tree30_stats.getInfo().get("treecover2000", 0)
-        tree50 = tree50_stats.getInfo().get("treecover2000", 0)
-        forest_m2 = forest_stats.getInfo().get("treecover2000", 0)
+        tree30 = tree_data["tree30"]
+        tree50 = tree_data["tree50"]
+        forest_m2 = forest_data["forest_m2"]
 
         # 3. YEARLY LOSS ANALYSIS (Hansen)
         stats = get_loss_histogram(ee_geom)
@@ -157,8 +157,8 @@ def run_vegetation_analysis(db, level=None, entity_id=None):
         baseline_ha = round(forest_m2 / 10000, 2)
         loss_pct = (total_loss_ha / baseline_ha * 100) if baseline_ha > 0 else 0
 
-        gain_stats = get_forest_gain_total(ee_geom)
-        gain_m2 = gain_stats.getInfo().get("gain", 0)
+        gain_data = get_forest_gain_total(ee_geom)
+        gain_m2 = gain_data["gain"]
         gain_ha = round(gain_m2 / 10000, 2)
 
         # --- 5. DYNAMIC WORLD (REGROWTH & VITALITY) ---
@@ -295,12 +295,12 @@ def process_ward_cached(ward, geojson):
     ee_geom = ee.Geometry(geojson)
 
     # BASELINE
-    tree30_stats, tree50_stats = county_tree_cover_area(ee_geom)
-    forest_stats = county_forest_area(ee_geom)
+    tree_data = county_tree_cover_area(ee_geom)
+    forest_data = county_forest_area(ee_geom)
 
-    tree30 = tree30_stats.getInfo().get("treecover2000", 0)
-    tree50 = tree50_stats.getInfo().get("treecover2000", 0)
-    forest_m2 = forest_stats.getInfo().get("treecover2000", 0)
+    tree30 = tree_data["tree30"]
+    tree50 = tree_data["tree50"]
+    forest_m2 = forest_data["forest_m2"]
 
     # LOSS
     stats = get_loss_histogram(ee_geom)
@@ -311,8 +311,8 @@ def process_ward_cached(ward, geojson):
     loss_pct = (total_loss_ha / baseline_ha * 100) if baseline_ha > 0 else 0
 
     # GAIN
-    gain_stats = get_forest_gain_total(ee_geom)
-    gain_m2 = gain_stats.getInfo().get("gain", 0)
+    gain_data = get_forest_gain_total(ee_geom)
+    gain_m2 = gain_data["gain"]
 
     # DYNAMIC WORLD
     dw = calculate_dw_transition(ee_geom, 2020, 2025)
@@ -405,8 +405,8 @@ def run_ward_vegetation_analysis(db, entity_id=None):
         # )
 
         # GAIN
-        gain_stats = get_forest_gain_total(ee_geom)
-        gain_m2 = gain_stats.getInfo().get("gain", 0)
+        gain_data = get_forest_gain_total(ee_geom)
+        gain_m2 = gain_data["gain"]
         gain_ha = round(gain_m2 / 10000, 2)
 
         # RISK
@@ -480,9 +480,12 @@ def run_subcounty_vegetation_analysis(db, entity_id=None):
         tree30_stats, tree50_stats = county_tree_cover_area(ee_geom)
         forest_stats = county_forest_area(ee_geom)
 
-        tree30 = tree30_stats.getInfo().get("treecover2000", 0)
-        tree50 = tree50_stats.getInfo().get("treecover2000", 0)
-        forest_m2 = forest_stats.getInfo().get("treecover2000", 0)
+        tree_data = county_tree_cover_area(ee_geom)
+        forest_data = county_forest_area(ee_geom)
+
+        tree30 = tree_data["tree30"]
+        tree50 = tree_data["tree50"]
+        forest_m2 = forest_data["forest_m2"]
 
         # HISTORICAL LOSS
         stats = get_loss_histogram(ee_geom)
@@ -727,12 +730,12 @@ def process_reserve_cached(reserve_id, name, geojson):
     ee_geom = ee.Geometry(geojson)
 
     # BASELINE
-    tree30_stats, tree50_stats = county_tree_cover_area(ee_geom)
-    forest_stats = county_forest_area(ee_geom)
+    tree_data = county_tree_cover_area(ee_geom)
+    forest_data = county_forest_area(ee_geom)
 
-    tree30 = tree30_stats.getInfo().get("treecover2000", 0)
-    tree50 = tree50_stats.getInfo().get("treecover2000", 0)
-    forest_m2 = forest_stats.getInfo().get("treecover2000", 0)
+    tree30 = tree_data["tree30"]
+    tree50 = tree_data["tree50"]
+    forest_m2 = forest_data["forest_m2"]
 
     # LOSS
     stats = get_loss_histogram(ee_geom)
@@ -743,8 +746,8 @@ def process_reserve_cached(reserve_id, name, geojson):
     loss_pct = (total_loss_ha / baseline_ha * 100) if baseline_ha > 0 else 0
 
     # GAIN
-    gain_stats = get_forest_gain_total(ee_geom)
-    gain_m2 = gain_stats.getInfo().get("gain", 0)
+    gain_data = get_forest_gain_total(ee_geom)
+    gain_m2 = gain_data["gain"]
 
     # DYNAMIC WORLD
     dw = calculate_dw_transition(ee_geom, 2020, 2025)

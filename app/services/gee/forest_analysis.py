@@ -57,24 +57,24 @@ def county_tree_cover_area(county_geometry):
 
     pixel_area = ee.Image.pixelArea()
 
-    area30 = canopy30.multiply(pixel_area)
-    area50 = canopy50.multiply(pixel_area)
-
-    stats30 = area30.reduceRegion(
+    stats30 = canopy30.multiply(pixel_area).reduceRegion(
         reducer=ee.Reducer.sum(),
         geometry=county_geometry,
         scale=30,
         maxPixels=1e13
-    )
+    ).getInfo()
 
-    stats50 = area50.reduceRegion(
+    stats50 = canopy50.multiply(pixel_area).reduceRegion(
         reducer=ee.Reducer.sum(),
         geometry=county_geometry,
         scale=30,
         maxPixels=1e13
-    )
+    ).getInfo()
 
-    return stats30, stats50
+    return {
+        "tree30": stats30.get("treecover2000", 0),
+        "tree50": stats50.get("treecover2000", 0)
+    }
 
 @redis_cache("forest_area", ttl=86400)
 def county_forest_area(county_geometry):
@@ -88,7 +88,11 @@ def county_forest_area(county_geometry):
         maxPixels=1e13
     )
 
-    return stats
+    stats = stats.getInfo()
+
+    return {
+        "forest_m2": stats.get("treecover2000", 0)
+    }
 
 
 def county_forest_area_by_year(county_geometry, year):
@@ -187,7 +191,7 @@ def get_loss_histogram(geometry):
         maxPixels=1e13
     )
 
-    return stats
+    return stats.getInfo()
 
 def build_yearly_loss(stats):
     data = stats.getInfo()
@@ -291,7 +295,11 @@ def get_forest_gain_total(geometry):
         maxPixels=1e13
     )
 
-    return stats
+    stats = stats.getInfo()
+
+    return {
+        "gain": stats.get("gain", 0)
+    }
 
 def get_dw_tree_probability(geometry, start_date, end_date):
 
