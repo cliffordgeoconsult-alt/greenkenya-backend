@@ -261,3 +261,58 @@ def alerts(
     db: Session = Depends(get_db)
 ):
     return get_alerts(db, level, entity_id)
+
+@router.get("/prewarm")
+def prewarm_all(db: Session = Depends(get_db)):
+
+    from app.services.admin_service import get_counties, get_wards, get_subcounties
+    from app.services.forest_intelligence_service import (
+        run_vegetation_analysis,
+        run_ward_vegetation_analysis,
+        run_subcounty_vegetation_analysis,
+        run_reserve_loss_analysis
+    )
+
+    print("🔥 PREWARM STARTED")
+
+    # -------------------------
+    # COUNTIES
+    # -------------------------
+    counties = get_counties(db)
+
+    for c in counties:
+        print(f"🌍 Prewarming county: {c['name']}")
+        run_vegetation_analysis(db, "county", c["id"])
+
+    # -------------------------
+    # WARDS
+    # -------------------------
+    wards = get_wards(db)
+
+    for w in wards:
+        print(f"🏘️ Prewarming ward: {w['name']}")
+        run_ward_vegetation_analysis(db, w["id"])
+
+    # -------------------------
+    # SUBCOUNTIES
+    # -------------------------
+    subs = get_subcounties(db)
+
+    for s in subs:
+        print(f"🧭 Prewarming subcounty: {s['name']}")
+        run_subcounty_vegetation_analysis(db, s["id"])
+
+    # -------------------------
+    # RESERVES
+    # -------------------------
+    print("🌲 Prewarming reserves...")
+    run_reserve_loss_analysis(db)
+
+    print("✅ PREWARM COMPLETE")
+
+    return {
+        "status": "prewarm complete",
+        "counties": len(counties),
+        "wards": len(wards),
+        "subcounties": len(subs)
+    }
