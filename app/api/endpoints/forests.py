@@ -344,7 +344,11 @@ def start_prewarm(db: Session = Depends(get_db)):
     for c in counties:
         prewarm_county.delay(c["id"])
 
-    for w in get_wards(db):
+    wards = get_wards(db)
+
+    print(f"Total wards to prewarm: {len(wards)}")
+
+    for w in wards:
         prewarm_ward.delay(w["id"])
 
     for s in get_subcounties(db):

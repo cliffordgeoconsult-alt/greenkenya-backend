@@ -9,7 +9,7 @@ def redis_cache(prefix, ttl=3600):
             key = make_cache_key(prefix, args, kwargs)
 
             cached = cache_get(key)
-            if cached:
+            if cached is not None:
                 print(f"⚡ REDIS HIT: {prefix}")
                 return cached
 

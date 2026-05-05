@@ -16,3 +16,8 @@ celery.conf.update(
     timezone="UTC",
     enable_utc=True,
 )
+
+celery.autodiscover_tasks(["app.tasks"])
+
+# 🔥 FORCE LOAD TASKS (IMPORTANT)
+import app.tasks.prewarm_tasks

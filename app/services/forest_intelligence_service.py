@@ -112,7 +112,7 @@ def process_county_cached(county, geojson, db):
         "coverage": coverage
     }
 
-def run_vegetation_analysis(db, level=None, entity_id=None):
+def run_vegetation_analysis(db, level=None, entity_id=None, prewarm=False):
     initialize_ee()
 
     if level == "county" and entity_id:
@@ -165,7 +165,10 @@ def run_vegetation_analysis(db, level=None, entity_id=None):
         
         # Long-term Transition (2020 - 2026 monitoring)
         # Note: 2026 DW data is pulled dynamically as it becomes available
-        dw_transitions = calculate_dw_transition(ee_geom, 2020, 2025)
+        if prewarm:
+            dw_transitions = {"regrowth_ha": 0}
+        else:
+            dw_transitions = calculate_dw_transition(ee_geom, 2020, 2025)
         regrowth_ha = dw_transitions.get("regrowth_ha", 0)
 
         
@@ -453,7 +456,7 @@ def run_ward_vegetation_analysis(db, entity_id=None):
     if entity_id:
         return results[0] if results else {}
     
-def run_subcounty_vegetation_analysis(db, entity_id=None):
+def run_subcounty_vegetation_analysis(db, entity_id=None, prewarm=False):
     initialize_ee()
 
     if entity_id:
@@ -494,7 +497,10 @@ def run_subcounty_vegetation_analysis(db, entity_id=None):
 
         # Long-term Transition (2020 - 2026 monitoring)
         # Note: 2026 DW data is pulled dynamically as it becomes available
-        dw_transitions = calculate_dw_transition(ee_geom, 2020, 2025)
+        if prewarm:
+            dw_transitions = {"regrowth_ha": 0}
+        else:
+            dw_transitions = calculate_dw_transition(ee_geom, 2020, 2025)
         regrowth_ha = dw_transitions.get("regrowth_ha", 0)
 
         # # Monthly Auto-Update: Calculate current month vitality
@@ -982,7 +988,7 @@ def run_non_reserve_forest_analysis(db):
     save_intelligence(db, results, "non_reserve_forest")
     return results
 
-def run_forest_intelligence(db):
+def run_forest_intelligence(db, prewarm=False):
 
     initialize_ee()
 
@@ -1026,7 +1032,10 @@ def run_forest_intelligence(db):
 
         # Long-term Transition (2020 - 2026 monitoring)
         # Note: 2026 DW data is pulled dynamically as it becomes available
-        dw_transitions = calculate_dw_transition(ee_geom, 2020, 2025)
+        if prewarm:
+            dw_transitions = {"regrowth_ha": 0}
+        else:
+            dw_transitions = calculate_dw_transition(ee_geom, 2020, 2025)
         regrowth_ha = dw_transitions.get("regrowth_ha", 0)
 
         # # Monthly Auto-Update: Calculate current month vitality
