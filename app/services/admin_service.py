@@ -14,6 +14,14 @@ TARGET_COUNTIES = [
     "NAROK"
 ]
 
+# Urban heat pilot (LST / land-cover context) — subset of counties with real EO only.
+UHI_TARGET_COUNTIES = [
+    "NAIROBI",
+    "NAKURU",
+    "KISUMU",
+    "MOMBASA",
+]
+
 # -------------------------
 # COUNTIES
 # -------------------------
@@ -220,6 +228,54 @@ def get_wards(db: Session):
         }
         for row in result
     ]
+
+
+def get_uhi_counties(db: Session):
+    query = """
+    SELECT
+        id,
+        name,
+        ST_AsGeoJSON(geometry) as geojson
+    FROM admin_county
+    WHERE UPPER(name) = ANY(:county_names)
+    """
+    result = db.execute(
+        text(query),
+        {"county_names": UHI_TARGET_COUNTIES},
+    )
+    return [
+        {"id": row.id, "name": row.name, "geometry": row.geojson}
+        for row in result
+    ]
+
+
+def get_uhi_wards(db: Session):
+    query = """
+    SELECT
+        w.id,
+        w.name,
+        w.county_id,
+        w.subcounty_id,
+        ST_AsGeoJSON(w.geometry) as geojson
+    FROM admin_ward w
+    JOIN admin_county c ON w.county_id = c.id
+    WHERE UPPER(c.name) = ANY(:county_names)
+    """
+    result = db.execute(
+        text(query),
+        {"county_names": UHI_TARGET_COUNTIES},
+    )
+    return [
+        {
+            "id": row.id,
+            "name": row.name,
+            "county_id": row.county_id,
+            "subcounty_id": row.subcounty_id,
+            "geometry": row.geojson,
+        }
+        for row in result
+    ]
+
 
 # def get_wards_by_county(db: Session, county_id: str):
 #     query = """
