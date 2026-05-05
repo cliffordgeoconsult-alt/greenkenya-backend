@@ -413,6 +413,21 @@ def smooth_forest_coverage(series):
 
 @redis_cache("yearly_coverage", ttl=86400)
 def calculate_yearly_coverage(geometry, county_name=None, start_year=2020, end_year=2026):
+    # #region agent log
+    try:
+        from app.core.prewarm_context import is_prewarm_bundle_active
+        from app.agent_debug_log import agent_debug_log
+
+        if is_prewarm_bundle_active():
+            agent_debug_log(
+                "H2",
+                "forest_analysis.calculate_yearly_coverage",
+                "unexpected_dw_coverage_during_bundle",
+                {"start_year": start_year, "end_year": end_year},
+            )
+    except Exception:
+        pass
+    # #endregion
 
     now = datetime.now()
     current_year = now.year

@@ -1,7 +1,6 @@
 # app/api/endpoints/forests.py
 import json
 import ee
-import time
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -273,83 +272,72 @@ def prewarm_all(db: Session = Depends(get_db)):
         run_subcounty_vegetation_analysis,
         run_reserve_loss_analysis
     )
+    from app.services.gee.ee_init import warmup_earth_engine_once
+    from app.core.prewarm_context import prewarm_bundle_begin, prewarm_bundle_end
 
     print("🔥 PREWARM STARTED")
+    prewarm_bundle_begin()
+    try:
+        warmup_earth_engine_once()
 
-    # -------------------------
-    # COUNTIES
-    # -------------------------
-    counties = get_counties(db)
+        # -------------------------
+        # COUNTIES
+        # -------------------------
+        counties = get_counties(db)
 
-    for c in counties:
-        print(f"🌍 Prewarming county: {c['name']}")
-        run_vegetation_analysis(db, "county", c["id"])
-        time.sleep(2)
+        for c in counties:
+            print(f"🌍 Prewarming county: {c['name']}")
+            run_vegetation_analysis(db, "county", c["id"], prewarm=True)
 
-    # -------------------------
-    # WARDS
-    # -------------------------
-    wards = get_wards(db)
+        # -------------------------
+        # WARDS
+        # -------------------------
+        wards = get_wards(db)
 
-    for w in wards:
-        print(f"🏘️ Prewarming ward: {w['name']}")
-        run_ward_vegetation_analysis(db, w["id"])
+        for w in wards:
+            print(f"🏘️ Prewarming ward: {w['name']}")
+            run_ward_vegetation_analysis(db, w["id"], prewarm=True)
 
-    # -------------------------
-    # SUBCOUNTIES
-    # -------------------------
-    subs = get_subcounties(db)
+        # -------------------------
+        # SUBCOUNTIES
+        # -------------------------
+        subs = get_subcounties(db)
 
-    for s in subs:
-        print(f"🧭 Prewarming subcounty: {s['name']}")
-        run_subcounty_vegetation_analysis(db, s["id"])
+        for s in subs:
+            print(f"🧭 Prewarming subcounty: {s['name']}")
+            run_subcounty_vegetation_analysis(db, s["id"], prewarm=True)
 
-    # -------------------------
-    # RESERVES
-    # -------------------------
-    print("🌲 Prewarming reserves...")
-    run_reserve_loss_analysis(db)
+        # -------------------------
+        # RESERVES
+        # -------------------------
+        print("🌲 Prewarming reserves...")
+        run_reserve_loss_analysis(db, prewarm=True)
 
-    print("✅ PREWARM COMPLETE")
+        print("✅ PREWARM COMPLETE")
 
-    return {
-        "status": "prewarm complete",
-        "counties": len(counties),
-        "wards": len(wards),
-        "subcounties": len(subs)
-    }
+        return {
+            "status": "prewarm complete",
+            "counties": len(counties),
+            "wards": len(wards),
+            "subcounties": len(subs)
+        }
+    finally:
+        prewarm_bundle_end()
 
 @router.get("/prewarm/start")
 def start_prewarm(db: Session = Depends(get_db)):
 
-    from app.services.admin_service import get_counties, get_wards, get_subcounties
-    from app.tasks.prewarm_tasks import (
-        prewarm_county,
-        prewarm_ward,
-        prewarm_reserves
-    )
+    from app.services.admin_service import get_counties, get_wards
+    from app.tasks.prewarm_tasks import prewarm_forests_bundle
 
-    TARGET_COUNTIES = [
-        "NAIROBI", "NAKURU", "KISUMU",
-        "MOMBASA", "KISII", "NYERI",
-        "TANA RIVER", "TAITA TAVETA", "NAROK"
-    ]
+    prewarm_forests_bundle.delay()
 
-    counties = [
-        c for c in get_counties(db)
-        if c["name"].upper() in TARGET_COUNTIES
-    ]
-
-    for c in counties:
-        prewarm_county.delay(c["id"])
-
+    counties = get_counties(db)
     wards = get_wards(db)
 
-    print(f"Total wards to prewarm: {len(wards)}")
-
-    for w in wards:
-        prewarm_ward.delay(w["id"])
-
-    prewarm_reserves.delay()
-
-    return {"status": "prewarm started in background"}
+    return {
+        "status": "prewarm started in background",
+        "mode": "single_task",
+        "counties": len(counties),
+        "wards": len(wards),
+    }
