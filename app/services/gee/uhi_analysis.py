@@ -11,13 +11,13 @@ UHI_MIN_YEAR = 2000
 
 DATA_SOURCES = [
     "MODIS/061/MOD11A2 (LST day/night, annual median, QC-masked)",
-    "MODIS/061/MOD13Q2 (NDVI, annual median)",
+    "MODIS/061/MOD13A2 (NDVI 1 km, 16-day composites, annual median)",
     "GOOGLE/DYNAMICWORLD/V1 (built probability, annual mean)",
 ]
 
 METHODOLOGY_SUMMARY = (
     "Annual median of MOD11A2 day/night LST (°C) after QC mask; "
-    "annual median MOD13Q2 NDVI; mean Dynamic World 'built' probability. "
+    "annual median MOD13A2 NDVI (scale 1e-4); mean Dynamic World 'built' probability. "
     "Ward fields lst_*_excess_vs_county_mean_c are ward minus county zonal means "
     "for the same year (relative heat vs county average, not rural baseline)."
 )
@@ -53,7 +53,7 @@ def _modis_ndvi_annual_median(geometry: ee.Geometry, year: int) -> ee.Image:
     start = f"{year}-01-01"
     end = _year_end_date(year)
     col = (
-        ee.ImageCollection("MODIS/061/MOD13Q2")
+        ee.ImageCollection("MODIS/061/MOD13A2")
         .filterDate(start, end)
         .filterBounds(geometry)
         .select("NDVI")
@@ -73,7 +73,7 @@ def _dynamic_world_built_mean(geometry: ee.Geometry, year: int) -> ee.Image:
     return dw.mean()
 
 
-@redis_cache("uhi_zonal", ttl=43200)
+@redis_cache("uhi_zonal_v2", ttl=43200)
 def compute_uhi_zonal_metrics(geojson_str: str, year: int) -> dict:
     """
     One reduceRegion (single GEE round-trip) for LST day/night, NDVI, built mean.
