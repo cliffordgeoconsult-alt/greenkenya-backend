@@ -55,6 +55,24 @@ def list_uhi_counties(db: Session) -> list:
     ]
 
 
+def get_uhi_geometry_normalized(db: Session, level: str, entity_id: str) -> Optional[str]:
+    """Return sort-keys-normalized GeoJSON string for county or ward in pilot list."""
+    level = (level or "").lower().strip()
+    if level == "county":
+        counties = get_uhi_counties(db)
+        c = next((x for x in counties if str(x["id"]) == str(entity_id)), None)
+        if not c:
+            return None
+        return _norm_geojson(c["geometry"])
+    if level == "ward":
+        wards = get_uhi_wards(db)
+        w = next((x for x in wards if str(x["id"]) == str(entity_id)), None)
+        if not w:
+            return None
+        return _norm_geojson(w["geometry"])
+    return None
+
+
 def list_uhi_wards(db: Session, county_id: Optional[str] = None) -> list:
     wards = get_uhi_wards(db)
     if county_id:

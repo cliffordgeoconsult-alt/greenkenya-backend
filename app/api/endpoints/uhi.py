@@ -2,11 +2,17 @@
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.services import uhi_service
+from app.services.gee.ee_init import initialize_ee
+from app.services.gee.uhi_analysis import (
+    get_uhi_lst_day_tile_url,
+    get_uhi_lst_night_tile_url,
+)
+from app.services.uhi_report_service import county_uhi_report, ward_uhi_report
 
 router = APIRouter()
 
@@ -30,6 +36,56 @@ def uhi_wards(
 ):
     """Wards in pilot counties; optional filter by county_id."""
     return {"wards": uhi_service.list_uhi_wards(db, county_id)}
+
+
+@router.get("/county/{county_id}/report")
+def uhi_county_report(
+    county_id: str,
+    year: Optional[int] = Query(None, ge=2000, le=2100),
+    db: Session = Depends(get_db),
+):
+    """Full UHI intelligence: trends, risk, forest baseline, tiles metadata, hotspots."""
+    return county_uhi_report(db, county_id, _year_or_default(year))
+
+
+@router.get("/ward/{ward_id}/report")
+def uhi_ward_report(
+    ward_id: str,
+    year: Optional[int] = Query(None, ge=2000, le=2100),
+    db: Session = Depends(get_db),
+):
+    """Full UHI intelligence for a ward (includes county cooling regression)."""
+    return ward_uhi_report(db, ward_id, _year_or_default(year))
+
+
+@router.get("/tiles/lst-day")
+def uhi_tile_lst_day(
+    level: str = Query(..., description="county or ward"),
+    entity_id: str = Query(...),
+    year: Optional[int] = Query(None, ge=2000, le=2100),
+    db: Session = Depends(get_db),
+):
+    """XYZ map tiles for annual median day LST (°C)."""
+    initialize_ee()
+    g = uhi_service.get_uhi_geometry_normalized(db, level, entity_id)
+    if not g:
+        raise HTTPException(status_code=404, detail="Entity not found or not in UHI pilot")
+    return get_uhi_lst_day_tile_url(g, _year_or_default(year))
+
+
+@router.get("/tiles/lst-night")
+def uhi_tile_lst_night(
+    level: str = Query(..., description="county or ward"),
+    entity_id: str = Query(...),
+    year: Optional[int] = Query(None, ge=2000, le=2100),
+    db: Session = Depends(get_db),
+):
+    """XYZ map tiles for annual median night LST (°C)."""
+    initialize_ee()
+    g = uhi_service.get_uhi_geometry_normalized(db, level, entity_id)
+    if not g:
+        raise HTTPException(status_code=404, detail="Entity not found or not in UHI pilot")
+    return get_uhi_lst_night_tile_url(g, _year_or_default(year))
 
 
 @router.get("/county/{county_id}")
