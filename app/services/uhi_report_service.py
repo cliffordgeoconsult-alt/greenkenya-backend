@@ -20,6 +20,9 @@ from app.services.gee.uhi_analysis import (
     UHI_MIN_YEAR,
 )
 
+# Long-horizon trend baseline (MODIS Era consistent; Dynamic World from ~2015).
+TREND_BASE_YEAR = 2001
+
 
 def _norm_geojson(geojson_string: str) -> str:
     import json
@@ -55,12 +58,464 @@ def _risk_level(score: int) -> str:
     return "LOW"
 
 
-def _heat_risk_score(lst_day: float, built_p: float, ndvi: float) -> int:
+def _heat_risk_score(
+    lst_day: float, built_p: Optional[float], ndvi: float
+) -> int:
     t = max(0.0, min(1.0, (lst_day - 22.0) / (40.0 - 22.0)))
-    b = max(0.0, min(1.0, built_p))
     v = max(0.0, min(1.0, 1.0 - ndvi))
-    s = 100.0 * (0.45 * t + 0.35 * b + 0.20 * v)
+    if built_p is not None:
+        b = max(0.0, min(1.0, built_p))
+        s = 100.0 * (0.45 * t + 0.35 * b + 0.20 * v)
+    else:
+        s = 100.0 * (0.55 * t + 0.45 * v)
     return int(max(0, min(100, round(s))))
+
+
+def _humane_building_message(kind: str) -> str:
+    return {
+        "no_pixels": (
+            "We could not summarize satellite pixels for this boundary right now—"
+            "coverage or masks left nothing to aggregate. Try again later; we are improving coverage checks."
+        ),
+        "incomplete": (
+            "Some layers are still catching up for this year (for example built-up before 2015). "
+            "Core temperature and vegetation metrics are shown where available."
+        ),
+        "generic": "Part of this profile is still being assembled from live Earth-engine pulls—check back soon.",
+    }.get(kind, _humane_building_message("generic"))
+
+
+def _insights_and_recommendations(
+    *,
+    lst_day: Optional[float],
+    ndvi: Optional[float],
+    built_pct: Optional[float],
+    uhi_intensity: Optional[float],
+    risk_level: Optional[str],
+    risk_score: Optional[int],
+    liv_pct: Optional[float],
+    cooling: Optional[float],
+    trend_temp: Optional[float],
+    trend_ndvi: Optional[float],
+    trend_built: Optional[float],
+    excess_vs_county: Optional[float],
+    era5_ok: bool,
+    dw_ok: bool,
+    forest_ok: bool,
+) -> tuple[list[str], list[str]]:
+    insights: list[str] = []
+    recs: list[str] = []
+
+    if excess_vs_county is not None:
+        if excess_vs_county > 0.5:
+            insights.append(
+                f"This area runs about {excess_vs_county:.1f} °C warmer than the county mean by day (MODIS), "
+                "which concentrates heat stress locally."
+            )
+            recs.append(
+                "Prioritize shade, street trees, and cool surfaces in these warmer pockets first."
+            )
+        elif excess_vs_county < -0.5:
+            insights.append(
+                f"Cooler than the county average by about {abs(excess_vs_county):.1f} °C—relatively favorable for daytime heat."
+            )
+
+    if lst_day is not None and lst_day >= 33:
+        insights.append(
+            f"Daytime land-surface temperature is high (≈{lst_day:.1f} °C annual median), which amplifies felt heat in dense areas."
+        )
+    if ndvi is not None and ndvi < 0.35:
+        insights.append(
+            f"Vegetation index is limited (NDVI ≈{ndvi:.2f}), so there is little canopy cooling compared with greener zones."
+        )
+        recs.append(
+            "Expand continuous tree canopy and vegetated corridors—small patches help less than connected cover."
+        )
+    if dw_ok and built_pct is not None and built_pct > 40:
+        insights.append(
+            f"Built-up signal is strong (~{built_pct:.0f}% mean built probability), which typically holds more heat overnight."
+        )
+    if not dw_ok:
+        insights.append(
+            "Built-up percentage is not available for this year from Dynamic World (catalog starts ~2015)—compare recent years for urbanization trend."
+        )
+    if uhi_intensity is not None and uhi_intensity > 3:
+        insights.append(
+            f"Urban heat island intensity vs forest baseline is about {uhi_intensity:.1f} °C—urban areas read noticeably hotter than nearby forest reference."
+        )
+    if risk_level in ("HIGH", "CRITICAL"):
+        insights.append(
+            f"Composite heat risk is {risk_level.lower()} (score {risk_score}). "
+            "That combines hot land surface, sparse vegetation"
+            + (
+                ", and dense built fabric."
+                if dw_ok
+                else ", with vegetation stress where built-up data is missing."
+            )
+        )
+        recs.append(
+            "Coordinate heat alerts with urban greening and cool-roof programs in the hottest ranked cells."
+        )
+    elif risk_level == "LOW":
+        insights.append("Overall heat-risk components look comparatively moderate this year.")
+
+    if liv_pct is not None:
+        insights.append(
+            f"Climate livability index (ERA5-Land, coarse grid): about {liv_pct:.0f}% of months had mean 2 m temperature in the 18–26 °C comfort band."
+        )
+    elif not era5_ok:
+        insights.append(
+            "Livability from ERA5-Land was not available—often a transient Earth Engine or geometry edge case."
+        )
+
+    if cooling is not None:
+        insights.append(
+            f"Across wards in this county, regression suggests roughly {cooling:+.2f} °C day LST change per +10% vegetation proxy (correlational)."
+        )
+
+    if trend_temp is not None:
+        if trend_temp > 1.0:
+            insights.append(
+                f"Since {TREND_BASE_YEAR}, median day LST rose about {trend_temp:.1f} °C—worth tracking alongside greening efforts."
+            )
+        elif trend_temp < -1.0:
+            insights.append(
+                f"Since {TREND_BASE_YEAR}, median day LST fell about {abs(trend_temp):.1f} °C in this zone."
+            )
+    if trend_ndvi is not None and abs(trend_ndvi) >= 0.05:
+        insights.append(
+            f"NDVI change since {TREND_BASE_YEAR} is about {trend_ndvi:+.3f}—{'greening' if trend_ndvi > 0 else 'browning'} signal in the MODIS record."
+        )
+    if trend_built is not None and abs(trend_built) >= 0.03:
+        insights.append(
+            f"Mean built probability changed by about {trend_built:+.3f} since {TREND_BASE_YEAR} (where both years have Dynamic World)."
+        )
+
+    if not forest_ok:
+        insights.append(
+            "Forest baseline for UHI intensity is unavailable—no forest reserve geometry intersects this county in our database."
+        )
+
+    if not recs:
+        recs.append(
+            "Keep monitoring seasonal NDVI and night-time LST—cooling interventions show up fastest in night metrics and vegetation continuity."
+        )
+    return insights, recs
+
+
+def build_uhi_year_snapshot(
+    db: Session,
+    *,
+    geojson_norm: str,
+    county_id: str,
+    year: int,
+    level: str,
+    entity_id: str,
+    name: str,
+    county_name: Optional[str] = None,
+    ward_county_excess_c: Optional[float] = None,
+) -> dict[str, Any]:
+    """Nested year payload (MODIS + DW + ERA5 + forest UHI); humane partials when layers fail."""
+    y = int(year)
+    m = compute_uhi_zonal_metrics(geojson_norm, y)
+
+    base: dict[str, Any] = {
+        "year": y,
+        "level": level,
+        "entity_id": entity_id,
+        "name": name,
+        "status": "complete",
+        "message": None,
+    }
+    if county_name is not None:
+        base["county_name"] = county_name
+    if level == "ward":
+        base["county_id"] = county_id
+
+    if m.get("error"):
+        base["status"] = "partial"
+        base["message"] = _humane_building_message(
+            "no_pixels" if m["error"] == "no_valid_pixels_in_geometry" else "generic"
+        )
+        base["temperature"] = None
+        base["uhi"] = None
+        base["vegetation"] = None
+        base["urbanization"] = None
+        base["livability"] = None
+        base["risk"] = None
+        base["trend"] = None
+        base["hotspots"] = []
+        base["insights"] = [base["message"]]
+        base["recommendations"] = [
+            "Retry after a few minutes; if this persists, the boundary may need a topology check."
+        ]
+        return base
+
+    lst_mean = m.get("lst_day_mean_c")
+    lst_min = m.get("lst_day_min_c")
+    lst_max = m.get("lst_day_max_c")
+    ndvi = m.get("ndvi_mean")
+    built_p = m.get("built_probability_mean")
+
+    if lst_mean is None:
+        base["status"] = "partial"
+        base["message"] = _humane_building_message("incomplete")
+        base["temperature"] = None
+        base["uhi"] = None
+        base["vegetation"] = {"ndvi": ndvi, "cooling_effect_per_10pct": None}
+        base["urbanization"] = {
+            "built_up_percent": round(float(built_p) * 100, 1)
+            if built_p is not None
+            else None
+        }
+        base["livability"] = {"percent_optimal": None}
+        base["risk"] = None
+        base["trend"] = None
+        base["hotspots"] = []
+        base["insights"] = [base["message"]]
+        base["recommendations"] = [
+            "Once LST composite fills in, risk and livability scores will populate automatically."
+        ]
+        return base
+
+    lst_day_f = float(lst_mean)
+    ndvi_f = float(ndvi) if ndvi is not None else None
+
+    dw_ok = built_p is not None
+    built_pct = round(float(built_p) * 100, 1) if dw_ok else None
+
+    fgj = _forest_union_geojson(db, str(county_id))
+    uhi_intensity: Optional[float] = None
+    baseline_label = "none"
+    forest_ok = bool(fgj)
+    if fgj:
+        fb = compute_forest_baseline_lst_day(_norm_geojson(fgj), y)
+        if fb.get("lst_day_forest_mean_c") is not None:
+            uhi_intensity = round(lst_day_f - float(fb["lst_day_forest_mean_c"]), 2)
+            baseline_label = "forest"
+
+    cool_reg = county_vegetation_cooling_slope(db, str(county_id), y)
+    cooling_val = cool_reg.get("cooling_effect_c_per_10pct_ndvi_proxy")
+
+    era = compute_era5_livability_percent(geojson_norm, y)
+    era5_ok = not era.get("error")
+    liv_pct = era.get("livability_percent") if era5_ok else None
+
+    risk_s = None
+    risk_lv = None
+    if ndvi_f is not None:
+        risk_s = _heat_risk_score(lst_day_f, float(built_p) if built_p is not None else None, ndvi_f)
+        risk_lv = _risk_level(risk_s)
+
+    base_m = compute_uhi_zonal_metrics(geojson_norm, TREND_BASE_YEAR)
+    trend: dict[str, Any] = {}
+    if not base_m.get("error"):
+        if base_m.get("lst_day_mean_c") is not None:
+            trend["temp_change_since_2001"] = round(
+                lst_day_f - float(base_m["lst_day_mean_c"]), 2
+            )
+        if (
+            ndvi_f is not None
+            and base_m.get("ndvi_mean") is not None
+        ):
+            trend["ndvi_change"] = round(
+                ndvi_f - float(base_m["ndvi_mean"]), 4
+            )
+        if (
+            built_p is not None
+            and base_m.get("built_probability_mean") is not None
+        ):
+            trend["built_change"] = round(
+                float(built_p) - float(base_m["built_probability_mean"]), 4
+            )
+
+    hs = compute_uhi_hotspots(geojson_norm, y)
+    hotspots_out: list[dict[str, Any]] = []
+    if not hs.get("error"):
+        for p in hs.get("priority_zones") or []:
+            hotspots_out.append(
+                {
+                    "rank": p.get("rank"),
+                    "priority": p.get("priority"),
+                    "mean_lst_day_c": p.get("mean_lst_day_c"),
+                    "geometry": p.get("geometry"),
+                }
+            )
+        if not hotspots_out:
+            for h in (hs.get("hotspots") or [])[:25]:
+                hotspots_out.append(
+                    {
+                        "mean_lst_day_c": h.get("mean_lst_day_c"),
+                        "geometry": h.get("geometry"),
+                    }
+                )
+
+    partial_note = None
+    if not dw_ok or not era5_ok or ndvi_f is None:
+        base["status"] = "partial"
+        partial_note = _humane_building_message("incomplete")
+
+    insights, recs = _insights_and_recommendations(
+        lst_day=lst_day_f,
+        ndvi=ndvi_f,
+        built_pct=built_pct,
+        uhi_intensity=uhi_intensity,
+        risk_level=risk_lv,
+        risk_score=risk_s,
+        liv_pct=liv_pct,
+        cooling=cooling_val,
+        trend_temp=trend.get("temp_change_since_2001"),
+        trend_ndvi=trend.get("ndvi_change"),
+        trend_built=trend.get("built_change"),
+        excess_vs_county=ward_county_excess_c,
+        era5_ok=era5_ok,
+        dw_ok=dw_ok,
+        forest_ok=forest_ok,
+    )
+    if partial_note:
+        insights.insert(0, partial_note)
+
+    base["message"] = partial_note
+    base["temperature"] = {
+        "mean": round(lst_day_f, 1),
+        "min": round(float(lst_min), 1) if lst_min is not None else None,
+        "max": round(float(lst_max), 1) if lst_max is not None else None,
+    }
+    base["uhi"] = {
+        "intensity": uhi_intensity,
+        "baseline": baseline_label,
+    }
+    base["vegetation"] = {
+        "ndvi": round(ndvi_f, 4) if ndvi_f is not None else None,
+        "cooling_effect_per_10pct": cooling_val,
+    }
+    base["urbanization"] = {"built_up_percent": built_pct}
+    base["livability"] = {"percent_optimal": liv_pct}
+    base["risk"] = (
+        {"heat_risk_score": risk_s, "level": risk_lv}
+        if risk_s is not None and risk_lv is not None
+        else None
+    )
+    base["trend"] = trend if trend else {}
+    base["hotspots"] = hotspots_out
+    base["insights"] = insights
+    base["recommendations"] = recs
+
+    return base
+
+
+def county_uhi_year_snapshot(db: Session, county_id: str, year: int) -> dict[str, Any]:
+    initialize_ee()
+    counties = get_uhi_counties(db)
+    county = next((c for c in counties if str(c["id"]) == str(county_id)), None)
+    if not county:
+        return {
+            "year": year,
+            "level": "county",
+            "entity_id": str(county_id),
+            "status": "partial",
+            "message": "This county is not in the UHI pilot list yet—we are expanding coverage gradually.",
+            "temperature": None,
+            "uhi": None,
+            "vegetation": None,
+            "urbanization": None,
+            "livability": None,
+            "risk": None,
+            "trend": {},
+            "hotspots": [],
+            "insights": ["County not found or not in UHI pilot list."],
+            "recommendations": ["Pick a pilot county from GET /uhi/counties."],
+        }
+    g = _norm_geojson(county["geometry"])
+    return build_uhi_year_snapshot(
+        db,
+        geojson_norm=g,
+        county_id=str(county_id),
+        year=year,
+        level="county",
+        entity_id=str(county["id"]),
+        name=county["name"],
+    )
+
+
+def ward_uhi_year_snapshot(db: Session, ward_id: str, year: int) -> dict[str, Any]:
+    initialize_ee()
+    wards = get_uhi_wards(db)
+    ward = next((w for w in wards if str(w["id"]) == str(ward_id)), None)
+    if not ward:
+        return {
+            "year": year,
+            "level": "ward",
+            "entity_id": str(ward_id),
+            "status": "partial",
+            "message": "This ward is not in the pilot dataset yet.",
+            "temperature": None,
+            "uhi": None,
+            "vegetation": None,
+            "urbanization": None,
+            "livability": None,
+            "risk": None,
+            "trend": {},
+            "hotspots": [],
+            "insights": ["Ward not found or not in UHI pilot counties."],
+            "recommendations": ["Select a ward from GET /uhi/wards."],
+        }
+    counties = get_uhi_counties(db)
+    county = next(
+        (c for c in counties if str(c["id"]) == str(ward["county_id"])),
+        None,
+    )
+    if not county:
+        return {
+            "year": year,
+            "level": "ward",
+            "entity_id": str(ward_id),
+            "status": "partial",
+            "message": "Parent county is missing from the pilot list.",
+            "temperature": None,
+            "uhi": None,
+            "vegetation": None,
+            "urbanization": None,
+            "livability": None,
+            "risk": None,
+            "trend": {},
+            "hotspots": [],
+            "insights": ["Parent county not in pilot list."],
+            "recommendations": [],
+        }
+
+    g = _norm_geojson(ward["geometry"])
+    excess: Optional[float] = None
+    cg = _norm_geojson(county["geometry"])
+    wm = compute_uhi_zonal_metrics(g, year)
+    cm = compute_uhi_zonal_metrics(cg, year)
+    if (
+        not wm.get("error")
+        and not cm.get("error")
+        and wm.get("lst_day_mean_c") is not None
+        and cm.get("lst_day_mean_c") is not None
+    ):
+        excess = round(
+            float(wm["lst_day_mean_c"]) - float(cm["lst_day_mean_c"]),
+            3,
+        )
+
+    snap = build_uhi_year_snapshot(
+        db,
+        geojson_norm=g,
+        county_id=str(ward["county_id"]),
+        year=year,
+        level="ward",
+        entity_id=str(ward["id"]),
+        name=ward["name"],
+        county_name=county["name"],
+        ward_county_excess_c=excess,
+    )
+    if excess is not None:
+        snap["comparison_to_county"] = {
+            "lst_day_excess_vs_county_mean_c": excess,
+        }
+    return snap
 
 
 def county_vegetation_cooling_slope(
@@ -116,268 +571,114 @@ def _yearly_built_green_series(
 
 def ward_uhi_report(db: Session, ward_id: str, year: int) -> dict[str, Any]:
     initialize_ee()
+    snap = ward_uhi_year_snapshot(db, ward_id, year)
+
     wards = get_uhi_wards(db)
     ward = next((w for w in wards if str(w["id"]) == str(ward_id)), None)
     if not ward:
-        return {"error": "Ward not found or not in UHI pilot counties"}
+        return {**snap, "data_sources": DATA_SOURCES, "methodology": METHODOLOGY_SUMMARY}
+
     counties = get_uhi_counties(db)
     county = next(
         (c for c in counties if str(c["id"]) == str(ward["county_id"])), None
     )
     if not county:
-        return {"error": "Parent county not in pilot list"}
+        return {**snap, "data_sources": DATA_SOURCES, "methodology": METHODOLOGY_SUMMARY}
 
     g = _norm_geojson(ward["geometry"])
     m = compute_uhi_zonal_metrics(g, year)
-    if m.get("error"):
-        return {
-            "error": m["error"],
-            "entity_id": str(ward_id),
-            "data_sources": DATA_SOURCES,
-            "methodology": METHODOLOGY_SUMMARY,
-        }
-    if (
-        m.get("lst_day_mean_c") is None
-        or m.get("ndvi_mean") is None
-        or m.get("built_probability_mean") is None
-    ):
-        return {
-            "error": "incomplete_zonal_metrics",
-            "entity_id": str(ward_id),
-            "data_sources": DATA_SOURCES,
-            "methodology": METHODOLOGY_SUMMARY,
-        }
-
-    lst_day = float(m["lst_day_mean_c"])
-    ndvi = float(m["ndvi_mean"])
-    built_p = float(m["built_probability_mean"])
-    built_pct = round(built_p * 100, 2)
-
-    fgj = _forest_union_geojson(db, str(ward["county_id"]))
-    uhi_block: dict[str, Any] = {"intensity": None, "baseline_type": "none"}
-    if fgj:
-        fb = compute_forest_baseline_lst_day(_norm_geojson(fgj), year)
-        if fb.get("lst_day_forest_mean_c") is not None:
-            uhi_block["intensity"] = round(
-                lst_day - float(fb["lst_day_forest_mean_c"]), 2
-            )
-            uhi_block["baseline_type"] = "forest"
-            uhi_block["baseline_description"] = (
-                "Mean day LST over union of forest reserves intersecting the county."
-            )
-    else:
-        uhi_block["baseline_note"] = (
-            "No intersecting forest reserve geometry in database for this county."
-        )
-
     cool = county_vegetation_cooling_slope(db, str(ward["county_id"]), year)
-    cooling_val = cool.get("cooling_effect_c_per_10pct_ndvi_proxy")
-
-    risk_s = _heat_risk_score(lst_day, built_p, ndvi)
-
     era = compute_era5_livability_percent(g, year)
-    liv_pct = era.get("livability_percent") if not era.get("error") else None
-    livability: dict[str, Any] = {
-        "percent_optimal": liv_pct,
-        "method": "era5_land_monthly_2m_t_share_in_18_26C",
-    }
-    if era.get("error"):
-        livability["error"] = era["error"]
-    else:
-        livability["months_in_optimal"] = era.get("livability_months_in_optimal_range")
-        livability["months_total"] = era.get("livability_months_total")
-        livability["era5_monthly_means_c"] = era.get("era5_monthly_means_c")
-
-    base_2000 = compute_uhi_zonal_metrics(g, UHI_MIN_YEAR)
-    trend: dict[str, Any] = {}
-    if not base_2000.get("error") and m.get("lst_day_mean_c") is not None:
-        if base_2000.get("lst_day_mean_c") is not None:
-            trend["temp_change_since_2000"] = round(
-                float(m["lst_day_mean_c"]) - float(base_2000["lst_day_mean_c"]),
-                2,
-            )
-        if base_2000.get("ndvi_mean") is not None and m.get("ndvi_mean") is not None:
-            trend["ndvi_change_since_2000"] = round(
-                float(m["ndvi_mean"]) - float(base_2000["ndvi_mean"]),
-                4,
-            )
-
-    hs = compute_uhi_hotspots(g, year)
-    hotspots = hs.get("hotspots", []) if not hs.get("error") else []
-    priority = hs.get("priority_zones", []) if not hs.get("error") else []
-
     yearly = _yearly_built_green_series(g, year)
+    hs = compute_uhi_hotspots(g, year)
 
     months_block: Optional[list[dict[str, Any]]] = None
     if year == datetime.now().year:
-        months_block = []
-        for mo in range(1, datetime.now().month + 1):
-            months_block.append(compute_uhi_monthly_metrics(g, year, mo))
+        months_block = [
+            compute_uhi_monthly_metrics(g, year, mo)
+            for mo in range(1, datetime.now().month + 1)
+        ]
 
-    return {
-        "year": year,
-        "level": "ward",
-        "entity_id": str(ward["id"]),
-        "name": ward["name"],
-        "county_id": str(ward["county_id"]),
-        "county_name": county["name"],
-        "temperature": {
-            "avg": m.get("lst_day_mean_c"),
-            "max": m.get("lst_day_max_c"),
-            "min": m.get("lst_day_min_c"),
-            "night_avg": m.get("lst_night_mean_c"),
-        },
-        "uhi": uhi_block,
-        "vegetation": {
-            "ndvi": m.get("ndvi_mean"),
-            "cooling_effect_per_10pct": cooling_val,
-            "cooling_regression": cool,
-        },
-        "urbanization": {
-            "built_up_percent": built_pct,
-            "built_probability_mean": built_p,
-        },
-        "livability": livability,
-        "risk": {
-            "heat_risk_score": risk_s,
-            "level": _risk_level(risk_s),
-        },
-        "trend": trend,
-        "yearly_greening_built": yearly,
-        "hotspots": hotspots,
-        "priority_zones": priority,
-        "monthly": months_block,
-        "data_sources": DATA_SOURCES,
-        "methodology": METHODOLOGY_SUMMARY,
-    }
+    out: dict[str, Any] = {**snap}
+    if isinstance(out.get("temperature"), dict) and m.get("lst_night_mean_c") is not None:
+        out["temperature"]["night_mean"] = m["lst_night_mean_c"]
+
+    veg = dict(out.get("vegetation") or {})
+    veg["cooling_regression"] = cool
+    out["vegetation"] = veg
+
+    liv = dict(out.get("livability") or {})
+    liv["method"] = "era5_land_monthly_2m_t_share_in_18_26C"
+    if era.get("error"):
+        liv["error"] = era["error"]
+    else:
+        liv["months_in_optimal"] = era.get("livability_months_in_optimal_range")
+        liv["months_total"] = era.get("livability_months_total")
+        liv["era5_monthly_means_c"] = era.get("era5_monthly_means_c")
+    out["livability"] = liv
+
+    out["yearly_greening_built"] = yearly
+    out["monthly"] = months_block
+    if not hs.get("error"):
+        out["priority_zones"] = hs.get("priority_zones", [])
+    if m.get("built_probability_mean") is not None:
+        ur = dict(out.get("urbanization") or {})
+        ur["built_probability_mean"] = m["built_probability_mean"]
+        out["urbanization"] = ur
+    out["data_sources"] = DATA_SOURCES
+    out["methodology"] = METHODOLOGY_SUMMARY
+    return out
 
 
 def county_uhi_report(db: Session, county_id: str, year: int) -> dict[str, Any]:
     initialize_ee()
+    snap = county_uhi_year_snapshot(db, county_id, year)
+
     counties = get_uhi_counties(db)
     county = next((c for c in counties if str(c["id"]) == str(county_id)), None)
     if not county:
-        return {"error": "County not found or not in UHI pilot list"}
+        return {**snap, "data_sources": DATA_SOURCES, "methodology": METHODOLOGY_SUMMARY}
 
     g = _norm_geojson(county["geometry"])
     m = compute_uhi_zonal_metrics(g, year)
-    if m.get("error"):
-        return {
-            "error": m["error"],
-            "entity_id": str(county_id),
-            "data_sources": DATA_SOURCES,
-            "methodology": METHODOLOGY_SUMMARY,
-        }
-    if (
-        m.get("lst_day_mean_c") is None
-        or m.get("ndvi_mean") is None
-        or m.get("built_probability_mean") is None
-    ):
-        return {
-            "error": "incomplete_zonal_metrics",
-            "entity_id": str(county_id),
-            "data_sources": DATA_SOURCES,
-            "methodology": METHODOLOGY_SUMMARY,
-        }
-
-    lst_day = float(m["lst_day_mean_c"])
-    ndvi = float(m["ndvi_mean"])
-    built_p = float(m["built_probability_mean"])
-    built_pct = round(built_p * 100, 2)
-
-    fgj = _forest_union_geojson(db, str(county_id))
-    uhi_block: dict[str, Any] = {
-        "intensity": None,
-        "baseline_type": "none",
-    }
-    if fgj:
-        fb = compute_forest_baseline_lst_day(_norm_geojson(fgj), year)
-        if fb.get("lst_day_forest_mean_c") is not None:
-            uhi_block["intensity"] = round(
-                lst_day - float(fb["lst_day_forest_mean_c"]), 2
-            )
-            uhi_block["baseline_type"] = "forest"
-            uhi_block["baseline_description"] = (
-                "Mean day LST over union of forest reserves intersecting the county."
-            )
-    else:
-        uhi_block["baseline_note"] = (
-            "No intersecting forest reserve geometry in database for this county."
-        )
-
     cool = county_vegetation_cooling_slope(db, str(county_id), year)
-    cooling_val = cool.get("cooling_effect_c_per_10pct_ndvi_proxy")
-    risk_s = _heat_risk_score(lst_day, built_p, ndvi)
     era = compute_era5_livability_percent(g, year)
-    liv_pct = era.get("livability_percent") if not era.get("error") else None
-    livability_c: dict[str, Any] = {
-        "percent_optimal": liv_pct,
-        "method": "era5_land_monthly_2m_t_share_in_18_26C",
-    }
-    if era.get("error"):
-        livability_c["error"] = era["error"]
-    else:
-        livability_c["months_in_optimal"] = era.get("livability_months_in_optimal_range")
-        livability_c["months_total"] = era.get("livability_months_total")
-        livability_c["era5_monthly_means_c"] = era.get("era5_monthly_means_c")
-
-    base_2000 = compute_uhi_zonal_metrics(g, UHI_MIN_YEAR)
-    trend: dict[str, Any] = {}
-    if not base_2000.get("error"):
-        if base_2000.get("lst_day_mean_c") is not None:
-            trend["temp_change_since_2000"] = round(
-                float(m["lst_day_mean_c"]) - float(base_2000["lst_day_mean_c"]),
-                2,
-            )
-        if base_2000.get("ndvi_mean") is not None and m.get("ndvi_mean") is not None:
-            trend["ndvi_change_since_2000"] = round(
-                float(m["ndvi_mean"]) - float(base_2000["ndvi_mean"]),
-                4,
-            )
-
-    hs = compute_uhi_hotspots(g, year)
-    hotspots = hs.get("hotspots", []) if not hs.get("error") else []
-    priority = hs.get("priority_zones", []) if not hs.get("error") else []
-
     yearly = _yearly_built_green_series(g, year)
+    hs = compute_uhi_hotspots(g, year)
 
     months_block: Optional[list[dict[str, Any]]] = None
     if year == datetime.now().year:
-        months_block = []
-        for mo in range(1, datetime.now().month + 1):
-            months_block.append(compute_uhi_monthly_metrics(g, year, mo))
+        months_block = [
+            compute_uhi_monthly_metrics(g, year, mo)
+            for mo in range(1, datetime.now().month + 1)
+        ]
 
-    return {
-        "year": year,
-        "level": "county",
-        "entity_id": str(county["id"]),
-        "name": county["name"],
-        "temperature": {
-            "avg": m.get("lst_day_mean_c"),
-            "max": m.get("lst_day_max_c"),
-            "min": m.get("lst_day_min_c"),
-            "night_avg": m.get("lst_night_mean_c"),
-        },
-        "uhi": uhi_block,
-        "vegetation": {
-            "ndvi": m.get("ndvi_mean"),
-            "cooling_effect_per_10pct": cooling_val,
-            "cooling_regression": cool,
-        },
-        "urbanization": {
-            "built_up_percent": built_pct,
-            "built_probability_mean": built_p,
-        },
-        "livability": livability_c,
-        "risk": {
-            "heat_risk_score": risk_s,
-            "level": _risk_level(risk_s),
-        },
-        "trend": trend,
-        "yearly_greening_built": yearly,
-        "hotspots": hotspots,
-        "priority_zones": priority,
-        "monthly": months_block,
-        "data_sources": DATA_SOURCES,
-        "methodology": METHODOLOGY_SUMMARY,
-    }
+    out: dict[str, Any] = {**snap}
+    if isinstance(out.get("temperature"), dict) and m.get("lst_night_mean_c") is not None:
+        out["temperature"]["night_mean"] = m["lst_night_mean_c"]
+
+    veg = dict(out.get("vegetation") or {})
+    veg["cooling_regression"] = cool
+    out["vegetation"] = veg
+
+    liv = dict(out.get("livability") or {})
+    liv["method"] = "era5_land_monthly_2m_t_share_in_18_26C"
+    if era.get("error"):
+        liv["error"] = era["error"]
+    else:
+        liv["months_in_optimal"] = era.get("livability_months_in_optimal_range")
+        liv["months_total"] = era.get("livability_months_total")
+        liv["era5_monthly_means_c"] = era.get("era5_monthly_means_c")
+    out["livability"] = liv
+
+    out["yearly_greening_built"] = yearly
+    out["monthly"] = months_block
+    if not hs.get("error"):
+        out["priority_zones"] = hs.get("priority_zones", [])
+    if m.get("built_probability_mean") is not None:
+        ur = dict(out.get("urbanization") or {})
+        ur["built_probability_mean"] = m["built_probability_mean"]
+        out["urbanization"] = ur
+    out["data_sources"] = DATA_SOURCES
+    out["methodology"] = METHODOLOGY_SUMMARY
+    return out
