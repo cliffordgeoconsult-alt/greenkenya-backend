@@ -7,7 +7,9 @@ def get_radd_yearly(db: Session, geom_geojson):
             EXTRACT(YEAR FROM alert_date) as year,
             COUNT(*) as alerts
         FROM radd_alerts
-        WHERE ST_Intersects(
+        WHERE 
+            geometry && ST_SetSRID(ST_GeomFromGeoJSON(:geom), 4326)
+        AND ST_Intersects(
             geometry,
             ST_SetSRID(ST_GeomFromGeoJSON(:geom), 4326)
         )
@@ -54,7 +56,7 @@ def get_radd_daily(db: Session, geom_geojson, days=30):
             COUNT(*) as alerts
         FROM radd_alerts
         WHERE 
-            alert_date >= NOW() - (:days || ' days')::interval
+            alert_date >= NOW() - INTERVAL '1 day' * :days
         AND ST_Intersects(
             geometry,
             ST_SetSRID(ST_GeomFromGeoJSON(:geom), 4326)

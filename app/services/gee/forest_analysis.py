@@ -1,7 +1,7 @@
 # app/services/gee/forest_analysis.py
 import ee
 from datetime import datetime
-
+from app.core.cache import redis_cache
 COUNTY_MONITORING_RULES = {
     # URBAN / HIGHLAND
     "NAIROBI": {"start_month": 7, "end_month": 9, "tree": 0.58, "built": 0.45, "patch": 8},
@@ -47,7 +47,7 @@ def get_true_forest_mask():
 
     return baseline.updateMask(connected.gte(55))
 
-
+@redis_cache("tree_cover", ttl=86400)
 def county_tree_cover_area(county_geometry):
     hansen = ee.Image("UMD/hansen/global_forest_change_2024_v1_12")
     treecover = hansen.select("treecover2000")
@@ -76,7 +76,7 @@ def county_tree_cover_area(county_geometry):
 
     return stats30, stats50
 
-
+@redis_cache("forest_area", ttl=86400)
 def county_forest_area(county_geometry):
     forest = get_reporting_forest_mask()
     area = forest.multiply(ee.Image.pixelArea())
@@ -162,6 +162,7 @@ def county_total_loss(county_geometry, year):
 
     return stats
 
+@redis_cache("loss_histogram", ttl=86400)
 def get_loss_histogram(geometry):
     hansen = ee.Image("UMD/hansen/global_forest_change_2024_v1_12")
     lossyear = hansen.select("lossyear")
@@ -269,6 +270,7 @@ def get_dw_coverage_tile(geometry, year):
 
     return map_id["tile_fetcher"].url_format
 
+@redis_cache("forest_gain", ttl=86400)
 def get_forest_gain_total(geometry):
 
     hansen = ee.Image("UMD/hansen/global_forest_change_2024_v1_12")
@@ -311,6 +313,7 @@ def get_dw_tree_probability(geometry, start_date, end_date):
         )
     )
 
+@redis_cache("dw_transition", ttl=86400)
 def calculate_dw_transition(geometry, start_year=2020, end_year=2025):
     """
     Compare baseline (2020) to current to detect REGROWTH or DEGRADATION.
@@ -387,6 +390,7 @@ def smooth_forest_coverage(series):
 
     return smoothed
 
+@redis_cache("yearly_coverage", ttl=86400)
 def calculate_yearly_coverage(geometry, county_name=None, start_year=2020, end_year=2026):
 
     now = datetime.now()

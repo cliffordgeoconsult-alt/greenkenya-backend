@@ -29,9 +29,29 @@ from app.services.radd_query_service import get_radd_alerts_count
 from app.services.ai_service import generate_ai_insight
 from app.services.carbon_service import calculate_net_carbon
 from datetime import datetime, timedelta
+from app.core.cache import redis_cache
 
 today = datetime.now().strftime('%Y-%m-%d')
 this_month_start = datetime.now().strftime('%Y-%m-01')
+
+@redis_cache("radd_daily", ttl=300)
+def cached_radd_daily(db, geojson):
+    return get_radd_daily(db, geojson)
+
+
+@redis_cache("radd_yearly", ttl=86400)
+def cached_radd_yearly(db, geojson):
+    return get_radd_yearly(db, geojson)
+
+
+@redis_cache("radd_monthly", ttl=3600)
+def cached_radd_monthly(db, geojson):
+    return get_radd_monthly_current_year(db, geojson)
+
+
+@redis_cache("radd_count", ttl=300)
+def cached_radd_count(db, geojson):
+    return get_radd_alerts_count(db, geojson)
 
 def calculate_risk(loss_pct, alerts_total, recent_alerts):
 
@@ -43,7 +63,55 @@ def calculate_risk(loss_pct, alerts_total, recent_alerts):
         return "medium"
     else:
         return "low"
-    
+
+@redis_cache("county_analysis", ttl=3600)
+def process_county_cached(county, geojson, db):
+
+    import ee
+    from app.services.gee.forest_analysis import (
+        county_tree_cover_area,
+        county_forest_area,
+        get_loss_histogram,
+        build_yearly_loss,
+        get_forest_gain_total,
+        calculate_dw_transition,
+        calculate_yearly_coverage
+    )
+
+    ee_geom = ee.Geometry(geojson)
+
+    tree30_stats, tree50_stats = county_tree_cover_area(ee_geom)
+    forest_stats = county_forest_area(ee_geom)
+
+    tree30 = tree30_stats.getInfo().get("treecover2000", 0)
+    tree50 = tree50_stats.getInfo().get("treecover2000", 0)
+    forest_m2 = forest_stats.getInfo().get("treecover2000", 0)
+
+    stats = get_loss_histogram(ee_geom)
+    yearly_data = build_yearly_loss(stats)
+
+    gain_stats = get_forest_gain_total(ee_geom)
+    gain_m2 = gain_stats.getInfo().get("gain", 0)
+
+    dw = calculate_dw_transition(ee_geom, 2020, 2025)
+
+    coverage = calculate_yearly_coverage(
+        ee_geom,
+        county["name"],
+        2017,
+        2026
+    )
+
+    return {
+        "tree30": tree30,
+        "tree50": tree50,
+        "forest_m2": forest_m2,
+        "yearly": yearly_data,
+        "gain_m2": gain_m2,
+        "regrowth": dw.get("regrowth_ha", 0),
+        "coverage": coverage
+    }
+
 def run_vegetation_analysis(db, level=None, entity_id=None):
     initialize_ee()
 
@@ -67,10 +135,10 @@ def run_vegetation_analysis(db, level=None, entity_id=None):
         ee_geom = ee.Geometry(geojson)
         
         # 1. RADD REAL-TIME LOSS
-        alerts_count = get_radd_alerts_count(db, json.dumps(geojson))
-        radd_daily = get_radd_daily(db, json.dumps(geojson))
-        radd_yearly = get_radd_yearly(db, json.dumps(geojson))
-        radd_monthly = get_radd_monthly_current_year(db, json.dumps(geojson))
+        alerts_count = cached_radd_count(db, json.dumps(geojson, sort_keys=True))
+        radd_daily = cached_radd_daily(db, json.dumps(geojson, sort_keys=True))
+        radd_yearly = cached_radd_yearly(db, json.dumps(geojson, sort_keys=True))
+        radd_monthly = cached_radd_monthly(db, json.dumps(geojson, sort_keys=True))
 
         # 2. HANSEN BASELINE (Historical)
         tree30_stats, tree50_stats = county_tree_cover_area(ee_geom)
@@ -210,6 +278,67 @@ def run_vegetation_analysis(db, level=None, entity_id=None):
     save_intelligence(db, results, "county")
     return results
 
+@redis_cache("ward_analysis", ttl=3600)
+def process_ward_cached(ward, geojson):
+
+    import ee
+    from app.services.gee.forest_analysis import (
+        county_tree_cover_area,
+        county_forest_area,
+        get_loss_histogram,
+        build_yearly_loss,
+        get_forest_gain_total,
+        calculate_dw_transition,
+        calculate_yearly_coverage
+    )
+
+    ee_geom = ee.Geometry(geojson)
+
+    # BASELINE
+    tree30_stats, tree50_stats = county_tree_cover_area(ee_geom)
+    forest_stats = county_forest_area(ee_geom)
+
+    tree30 = tree30_stats.getInfo().get("treecover2000", 0)
+    tree50 = tree50_stats.getInfo().get("treecover2000", 0)
+    forest_m2 = forest_stats.getInfo().get("treecover2000", 0)
+
+    # LOSS
+    stats = get_loss_histogram(ee_geom)
+    yearly_data = build_yearly_loss(stats)
+
+    total_loss_ha = yearly_data[-1]["loss_total_ha"] if yearly_data else 0
+    baseline_ha = round(forest_m2 / 10000, 2)
+    loss_pct = (total_loss_ha / baseline_ha * 100) if baseline_ha > 0 else 0
+
+    # GAIN
+    gain_stats = get_forest_gain_total(ee_geom)
+    gain_m2 = gain_stats.getInfo().get("gain", 0)
+
+    # DYNAMIC WORLD
+    dw = calculate_dw_transition(ee_geom, 2020, 2025)
+
+    coverage = calculate_yearly_coverage(
+        ee_geom,
+        None,
+        2020,
+        2026
+    )
+
+    latest_coverage = coverage[-1]["forest_extent_ha"]
+
+    return {
+        "tree30": tree30,
+        "tree50": tree50,
+        "forest_m2": forest_m2,
+        "yearly": yearly_data,
+        "total_loss_ha": total_loss_ha,
+        "loss_pct": loss_pct,
+        "gain_m2": gain_m2,
+        "regrowth": dw.get("regrowth_ha", 0),
+        "coverage": coverage,
+        "latest_coverage": latest_coverage
+    }
+
 def run_ward_vegetation_analysis(db, entity_id=None):
     initialize_ee()
 
@@ -234,53 +363,29 @@ def run_ward_vegetation_analysis(db, entity_id=None):
         ee_geom = ee.Geometry(geojson)
 
         # BASELINE
-        tree30_stats, tree50_stats = county_tree_cover_area(ee_geom)
-        forest_stats = county_forest_area(ee_geom)
+        geojson = json.loads(ward["geometry"])
 
-        tree30 = tree30_stats.getInfo().get("treecover2000", 0)
-        tree50 = tree50_stats.getInfo().get("treecover2000", 0)
-        forest_m2 = forest_stats.getInfo().get("treecover2000", 0)
+        cached = process_ward_cached(ward, geojson)
 
-        # HISTORICAL LOSS
-        stats = get_loss_histogram(ee_geom)
-        yearly_data = build_yearly_loss(stats)
+        tree30 = cached["tree30"]
+        tree50 = cached["tree50"]
+        forest_m2 = cached["forest_m2"]
 
-        total_loss_ha = yearly_data[-1]["loss_total_ha"] if yearly_data else 0
-        baseline_ha = round(forest_m2 / 10000, 2)
-        loss_pct = (total_loss_ha / baseline_ha * 100) if baseline_ha > 0 else 0
+        yearly_data = cached["yearly"]
+        total_loss_ha = cached["total_loss_ha"]
+        loss_pct = cached["loss_pct"]
 
-        # Long-term Transition (2020 - 2026 monitoring)
-        # Note: 2026 DW data is pulled dynamically as it becomes available
-        dw_transitions = calculate_dw_transition(ee_geom, 2020, 2025)
-        regrowth_ha = dw_transitions.get("regrowth_ha", 0)
+        gain_m2 = cached["gain_m2"]
+        gain_ha = round(gain_m2 / 10000, 2)
 
-        # # Monthly Auto-Update: Calculate current month vitality
-        # current_vitality_img = get_dw_tree_probability(ee_geom, this_month_start, today)
-        # vitality_stats = current_vitality_img.reduceRegion(
-        #     reducer=ee.Reducer.mean(),
-        #     geometry=ee_geom,
-        #     scale=30,  # Scaled for performance
-        #     maxPixels=1e13
-        # ).getInfo()
-        
-        # # Convert 0-1 probability to a percentage 0-100
-        # current_vitality_pct = round((vitality_stats.get('trees', 0) * 100), 2)
-        
-        # --- NEW: YEARLY COVERAGE ---
-        yearly_coverage = calculate_yearly_coverage(
-            ee_geom,
-            None,
-            2020,
-            2026
-        )
-        
-        # Get the latest coverage (2026) for quick display
-        latest_coverage_ha = yearly_coverage[-1]["forest_extent_ha"]
+        regrowth_ha = cached["regrowth"]
+        yearly_coverage = cached["coverage"]
+        latest_coverage_ha = cached["latest_coverage"]
         # RADD REAL-TIME
-        alerts_count = get_radd_alerts_count(db, json.dumps(geojson))
-        radd_daily = get_radd_daily(db, json.dumps(geojson))
-        radd_yearly = get_radd_yearly(db, json.dumps(geojson))
-        radd_monthly = get_radd_monthly_current_year(db, json.dumps(geojson))
+        alerts_count = cached_radd_count(db, json.dumps(geojson, sort_keys=True))
+        radd_daily = cached_radd_daily(db, json.dumps(geojson, sort_keys=True))
+        radd_yearly = cached_radd_yearly(db, json.dumps(geojson, sort_keys=True))
+        radd_monthly = cached_radd_monthly(db, json.dumps(geojson, sort_keys=True))
 
         alerts_total = sum([y["alerts"] for y in radd_yearly]) if radd_yearly else 0
 
@@ -415,10 +520,10 @@ def run_subcounty_vegetation_analysis(db, entity_id=None):
         # Get the latest coverage (2026) for quick display
         latest_coverage_ha = yearly_coverage[-1]["forest_extent_ha"]
         # RADD (REAL-TIME)
-        alerts_count = get_radd_alerts_count(db, json.dumps(geojson))
-        radd_daily = get_radd_daily(db, json.dumps(geojson))
-        radd_yearly = get_radd_yearly(db, json.dumps(geojson))
-        radd_monthly = get_radd_monthly_current_year(db, json.dumps(geojson))
+        alerts_count = cached_radd_count(db, json.dumps(geojson, sort_keys=True))
+        radd_daily = cached_radd_daily(db, json.dumps(geojson, sort_keys=True))
+        radd_yearly = cached_radd_yearly(db, json.dumps(geojson, sort_keys=True))
+        radd_monthly = cached_radd_monthly(db, json.dumps(geojson, sort_keys=True))
 
         alerts_total = sum([y["alerts"] for y in radd_yearly]) if radd_yearly else 0
 
@@ -536,11 +641,11 @@ def run_national_vegetation_analysis(db):
     latest_coverage_ha = yearly_coverage[-1]["forest_extent_ha"]
 
     # ⚡ RADD
-    alerts_count = get_radd_alerts_count(db, result.geojson)
-    radd_daily = get_radd_daily(db, result.geojson)
+    alerts_count = cached_radd_count(db, result.geojson)
+    radd_daily = cached_radd_daily(db, result.geojson)
 
-    radd_yearly = get_radd_yearly(db, result.geojson)
-    radd_monthly = get_radd_monthly_current_year(db, result.geojson)
+    radd_yearly = cached_radd_yearly(db, result.geojson)
+    radd_monthly = cached_radd_monthly(db, result.geojson)
 
     alerts_total = sum([y["alerts"] for y in radd_yearly]) if radd_yearly else 0
 
@@ -605,6 +710,67 @@ def run_national_vegetation_analysis(db):
     save_intelligence(db, [result], "national")
     return result
 
+@redis_cache("reserve_analysis", ttl=3600)
+def process_reserve_cached(reserve_id, name, geojson):
+
+    import ee
+    from app.services.gee.forest_analysis import (
+        county_tree_cover_area,
+        county_forest_area,
+        get_loss_histogram,
+        build_yearly_loss,
+        get_forest_gain_total,
+        calculate_dw_transition,
+        calculate_yearly_coverage
+    )
+
+    ee_geom = ee.Geometry(geojson)
+
+    # BASELINE
+    tree30_stats, tree50_stats = county_tree_cover_area(ee_geom)
+    forest_stats = county_forest_area(ee_geom)
+
+    tree30 = tree30_stats.getInfo().get("treecover2000", 0)
+    tree50 = tree50_stats.getInfo().get("treecover2000", 0)
+    forest_m2 = forest_stats.getInfo().get("treecover2000", 0)
+
+    # LOSS
+    stats = get_loss_histogram(ee_geom)
+    yearly_data = build_yearly_loss(stats)
+
+    total_loss_ha = yearly_data[-1]["loss_total_ha"] if yearly_data else 0
+    baseline_ha = round(forest_m2 / 10000, 2)
+    loss_pct = (total_loss_ha / baseline_ha * 100) if baseline_ha > 0 else 0
+
+    # GAIN
+    gain_stats = get_forest_gain_total(ee_geom)
+    gain_m2 = gain_stats.getInfo().get("gain", 0)
+
+    # DYNAMIC WORLD
+    dw = calculate_dw_transition(ee_geom, 2020, 2025)
+
+    coverage = calculate_yearly_coverage(
+        ee_geom,
+        name,
+        2020,
+        2026
+    )
+
+    latest_coverage = coverage[-1]["forest_extent_ha"]
+
+    return {
+        "tree30": tree30,
+        "tree50": tree50,
+        "forest_m2": forest_m2,
+        "yearly": yearly_data,
+        "total_loss_ha": total_loss_ha,
+        "loss_pct": loss_pct,
+        "gain_m2": gain_m2,
+        "regrowth": dw.get("regrowth_ha", 0),
+        "coverage": coverage,
+        "latest_coverage": latest_coverage
+    }
+
 def run_reserve_loss_analysis(db):
 
     initialize_ee()
@@ -624,68 +790,28 @@ def run_reserve_loss_analysis(db):
 
         ee_geom = ee.Geometry(geojson)
 
-        # BASELINE
-        tree30_stats, tree50_stats = county_tree_cover_area(ee_geom)
-        forest_stats = county_forest_area(ee_geom)
+        cached = process_reserve_cached(reserve_id, name, geojson)
 
-        tree30 = tree30_stats.getInfo().get("treecover2000", 0)
-        tree50 = tree50_stats.getInfo().get("treecover2000", 0)
-        forest_m2 = forest_stats.getInfo().get("treecover2000", 0)
+        tree30 = cached["tree30"]
+        tree50 = cached["tree50"]
+        forest_m2 = cached["forest_m2"]
 
-        # LOSS
-        stats = get_loss_histogram(ee_geom)
-        yearly_data = build_yearly_loss(stats)
+        yearly_data = cached["yearly"]
+        total_loss_ha = cached["total_loss_ha"]
+        loss_pct = cached["loss_pct"]
 
-        total_loss_ha = yearly_data[-1]["loss_total_ha"] if yearly_data else 0
-        baseline_ha = round(forest_m2 / 10000, 2)
-        loss_pct = (total_loss_ha / baseline_ha * 100) if baseline_ha > 0 else 0
+        gain_m2 = cached["gain_m2"]
+        gain_ha = round(gain_m2 / 10000, 2)
 
-        # Long-term Transition (2020 - 2026 monitoring)
-        # Note: 2026 DW data is pulled dynamically as it becomes available
-        dw_transitions = calculate_dw_transition(ee_geom, 2020, 2025)
-        regrowth_ha = dw_transitions.get("regrowth_ha", 0)
-
-        # # Monthly Auto-Update: Calculate current month vitality
-        # current_vitality_img = get_dw_tree_probability(ee_geom, this_month_start, today)
-        # vitality_stats = ee.Dictionary(
-        #     ee.Algorithms.If(
-        #         current_vitality_img.reduceRegion(
-        #             reducer=ee.Reducer.count(),
-        #             geometry=ee_geom,
-        #             scale=30,
-        #             maxPixels=1e13
-        #         ).values().get(0),
-
-        #         current_vitality_img.reduceRegion(
-        #             reducer=ee.Reducer.mean(),
-        #             geometry=ee_geom,
-        #             scale=30,
-        #             maxPixels=1e13
-        #         ),
-
-        #         ee.Dictionary({"trees": 0})
-        #     )
-        # ).getInfo()
-
-        # tree_val = vitality_stats.get("trees", 0)
-        # current_vitality_pct = round(tree_val * 100, 2)
-        
-        # --- NEW: YEARLY COVERAGE ---
-        yearly_coverage = calculate_yearly_coverage(
-            ee_geom,
-            name,
-            2020,
-            2026
-        )
-        
-        # Get the latest coverage (2026) for quick display
-        latest_coverage_ha = yearly_coverage[-1]["forest_extent_ha"]
+        regrowth_ha = cached["regrowth"]
+        yearly_coverage = cached["coverage"]
+        latest_coverage_ha = cached["latest_coverage"]
         # RADD
-        alerts_count = get_radd_alerts_count(db, json.dumps(geojson))
-        radd_daily = get_radd_daily(db, json.dumps(geojson))
+        alerts_count = cached_radd_count(db, json.dumps(geojson, sort_keys=True))
+        radd_daily = cached_radd_daily(db, json.dumps(geojson, sort_keys=True))
 
-        radd_yearly = get_radd_yearly(db, json.dumps(geojson))
-        radd_monthly = get_radd_monthly_current_year(db, json.dumps(geojson))
+        radd_yearly = cached_radd_yearly(db, json.dumps(geojson, sort_keys=True))
+        radd_monthly = cached_radd_monthly(db, json.dumps(geojson, sort_keys=True))
 
         alerts_total = sum([y["alerts"] for y in radd_yearly]) if radd_yearly else 0
         # 
@@ -794,10 +920,10 @@ def run_non_reserve_forest_analysis(db):
         loss_pct = (total_loss_ha / baseline_ha * 100) if baseline_ha > 0 else 0
 
         # ⚡ RADD
-        alerts_count = get_radd_alerts_count(db, json.dumps(geojson))
-        radd_daily = get_radd_daily(db, json.dumps(geojson))
-        radd_yearly = get_radd_yearly(db, json.dumps(geojson))
-        radd_monthly = get_radd_monthly_current_year(db, json.dumps(geojson))
+        alerts_count = cached_radd_count(db, json.dumps(geojson, sort_keys=True))
+        radd_daily = cached_radd_daily(db, json.dumps(geojson, sort_keys=True))
+        radd_yearly = cached_radd_yearly(db, json.dumps(geojson, sort_keys=True))
+        radd_monthly = cached_radd_monthly(db, json.dumps(geojson, sort_keys=True))
 
         alerts_total = sum([y["alerts"] for y in radd_yearly]) if radd_yearly else 0
 
@@ -926,11 +1052,11 @@ def run_forest_intelligence(db):
         # Get the latest coverage (2026) for quick display
         latest_coverage_ha = yearly_coverage[-1]["forest_extent_ha"]
         # RADD
-        alerts_count = get_radd_alerts_count(db, json.dumps(geojson))
-        radd_daily = get_radd_daily(db, json.dumps(geojson))
+        alerts_count = cached_radd_count(db, json.dumps(geojson, sort_keys=True))
+        radd_daily = cached_radd_daily(db, json.dumps(geojson, sort_keys=True))
 
-        radd_yearly = get_radd_yearly(db, json.dumps(geojson))
-        radd_monthly = get_radd_monthly_current_year(db, json.dumps(geojson))
+        radd_yearly = cached_radd_yearly(db, json.dumps(geojson, sort_keys=True))
+        radd_monthly = cached_radd_monthly(db, json.dumps(geojson, sort_keys=True))
 
         alerts_total = sum([y["alerts"] for y in radd_yearly]) if radd_yearly else 0
 
@@ -958,7 +1084,7 @@ def run_forest_intelligence(db):
                 ST_SetSRID(ST_GeomFromGeoJSON(:geom), 4326)
             )
             LIMIT 1
-        """), {"geom": json.dumps(geojson)}).fetchone()
+        """), {"geom": json.dumps(geojson, sort_keys=True)}).fetchone()
 
         is_protected = bool(reserve)
         reserve_name = reserve[0] if reserve else None
