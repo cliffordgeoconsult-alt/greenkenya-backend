@@ -71,8 +71,14 @@ def _heat_risk_score(
     return int(max(0, min(100, round(s))))
 
 
+_HUMANE_GENERIC = (
+    "Part of this profile is still being assembled from live Earth-engine pulls—check back soon."
+)
+
+
 def _humane_building_message(kind: str) -> str:
-    return {
+    # Do not use dict.get(..., recursive_call): Python evaluates the default eagerly.
+    messages = {
         "no_pixels": (
             "We could not summarize satellite pixels for this boundary right now—"
             "coverage or masks left nothing to aggregate. Try again later; we are improving coverage checks."
@@ -81,8 +87,9 @@ def _humane_building_message(kind: str) -> str:
             "Some layers are still catching up for this year (for example built-up before 2015). "
             "Core temperature and vegetation metrics are shown where available."
         ),
-        "generic": "Part of this profile is still being assembled from live Earth-engine pulls—check back soon.",
-    }.get(kind, _humane_building_message("generic"))
+        "generic": _HUMANE_GENERIC,
+    }
+    return messages.get(kind, _HUMANE_GENERIC)
 
 
 def _insights_and_recommendations(
