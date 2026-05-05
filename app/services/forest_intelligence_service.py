@@ -477,9 +477,6 @@ def run_subcounty_vegetation_analysis(db, entity_id=None):
         ee_geom = ee.Geometry(geojson)
 
         # BASELINE
-        tree30_stats, tree50_stats = county_tree_cover_area(ee_geom)
-        forest_stats = county_forest_area(ee_geom)
-
         tree_data = county_tree_cover_area(ee_geom)
         forest_data = county_forest_area(ee_geom)
 
@@ -600,12 +597,12 @@ def run_national_vegetation_analysis(db):
     kenya_geom = ee.Geometry(json.loads(result.geojson))
 
     # BASELINE
-    tree30_stats, tree50_stats = county_tree_cover_area(kenya_geom)
-    forest_stats = county_forest_area(kenya_geom)
+    tree_data = county_tree_cover_area(kenya_geom)
+    forest_data = county_forest_area(kenya_geom)
 
-    tree30 = tree30_stats.getInfo().get("treecover2000", 0)
-    tree50 = tree50_stats.getInfo().get("treecover2000", 0)
-    forest_m2 = forest_stats.getInfo().get("treecover2000", 0)
+    tree30 = tree_data["tree30"]
+    tree50 = tree_data["tree50"]
+    forest_m2 = forest_data["forest_m2"]
 
     # HISTORICAL LOSS
     stats = get_loss_histogram(kenya_geom)
@@ -668,8 +665,8 @@ def run_national_vegetation_analysis(db):
     #     )
 
     # GAIN
-    gain_stats = get_forest_gain_total(kenya_geom)
-    gain_m2 = gain_stats.getInfo().get("gain", 0)
+    gain_data = get_forest_gain_total(kenya_geom)
+    gain_m2 = gain_data["gain"]
     gain_ha = round(gain_m2 / 10000, 2)
 
     # RISK
@@ -834,8 +831,8 @@ def run_reserve_loss_analysis(db):
         # )
 
         # GAIN
-        gain_stats = get_forest_gain_total(ee_geom)
-        gain_m2 = gain_stats.getInfo().get("gain", 0)
+        gain_data = get_forest_gain_total(ee_geom)
+        gain_m2 = gain_data["gain"]
         gain_ha = round(gain_m2 / 10000, 2)
 
         # RISK
@@ -907,12 +904,12 @@ def run_non_reserve_forest_analysis(db):
         ee_geom = ee.Geometry(geojson)
 
         # BASELINE
-        tree30_stats, tree50_stats = county_tree_cover_area(ee_geom)
-        forest_stats = county_forest_area(ee_geom)
+        tree_data = county_tree_cover_area(ee_geom)
+        forest_data = county_forest_area(ee_geom)
 
-        tree30 = tree30_stats.getInfo().get("treecover2000", 0)
-        tree50 = tree50_stats.getInfo().get("treecover2000", 0)
-        forest_m2 = forest_stats.getInfo().get("treecover2000", 0)
+        tree30 = tree_data["tree30"]
+        tree50 = tree_data["tree50"]
+        forest_m2 = forest_data["forest_m2"]
 
         # LOSS
         stats = get_loss_histogram(ee_geom)
@@ -946,8 +943,8 @@ def run_non_reserve_forest_analysis(db):
         # )
 
         # GAIN
-        gain_stats = get_forest_gain_total(ee_geom)
-        gain_m2 = gain_stats.getInfo().get("gain", 0)
+        gain_data = get_forest_gain_total(ee_geom)
+        gain_m2 = gain_data["gain"]
         gain_ha = round(gain_m2 / 10000, 2)
 
         # RISK
@@ -1011,12 +1008,12 @@ def run_forest_intelligence(db):
         ee_geom = ee.Geometry(geojson)
 
         # BASELINE
-        tree30_stats, tree50_stats = county_tree_cover_area(ee_geom)
-        forest_stats = county_forest_area(ee_geom)
+        tree_data = county_tree_cover_area(ee_geom)
+        forest_data = county_forest_area(ee_geom)
 
-        tree30 = tree30_stats.getInfo().get("treecover2000", 0)
-        tree50 = tree50_stats.getInfo().get("treecover2000", 0)
-        forest_m2 = forest_stats.getInfo().get("treecover2000", 0)
+        tree30 = tree_data["tree30"]
+        tree50 = tree_data["tree50"]
+        forest_m2 = forest_data["forest_m2"]
 
         baseline_ha = round(forest_m2 / 10000, 2)
 
@@ -1093,8 +1090,8 @@ def run_forest_intelligence(db):
         reserve_name = reserve[0] if reserve else None
 
         # GAIN
-        gain_stats = get_forest_gain_total(ee_geom)
-        gain_m2 = gain_stats.getInfo().get("gain", 0)
+        gain_data = get_forest_gain_total(ee_geom)
+        gain_m2 = gain_data["gain"]
         gain_ha = round(gain_m2 / 10000, 2)
 
         # RISK LOGIC

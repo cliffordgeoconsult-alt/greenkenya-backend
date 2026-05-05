@@ -194,8 +194,8 @@ def get_loss_histogram(geometry):
     return stats.getInfo()
 
 def build_yearly_loss(stats):
-    data = stats.getInfo()
-    groups = data.get("groups", []) if data else []
+    data = stats or {}
+    groups = data.get("groups", [])
 
     yearly_map = {g["lossyear"]: g["sum"] for g in groups}
 
