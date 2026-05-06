@@ -1,7 +1,7 @@
 # app/api/endpoints/forests.py
 import json
 import ee
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from app.db.session import get_db
@@ -104,8 +104,22 @@ def compute_reserves(db: Session = Depends(get_db)):
     return compute_reserve_forests(db)
 
 @router.get("/forest-analysis/reserves")
-def reserve_loss_analysis(db: Session = Depends(get_db)):
-    return run_reserve_loss_analysis(db)
+def reserve_loss_analysis(
+    reserve_id: str | None = Query(
+        None,
+        description="Analyze only this reserve (forest_reserves.reserve_id). Omit for all reserves.",
+    ),
+    entity_id: str | None = Query(
+        None,
+        description="Same as reserve_id; use whichever matches the frontend model.",
+    ),
+    db: Session = Depends(get_db),
+):
+    rid = reserve_id or entity_id
+    out = run_reserve_loss_analysis(db, reserve_id=rid)
+    if rid and not out:
+        raise HTTPException(status_code=404, detail="Reserve not found")
+    return out
 
 @router.get("/forest-analysis/non-reserve")
 def non_reserve_forest_analysis(db: Session = Depends(get_db)):

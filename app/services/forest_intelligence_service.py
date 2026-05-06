@@ -773,14 +773,26 @@ def process_reserve_cached(reserve_id, name, geojson):
     return _reserve_gee_core(name, geojson, prewarm=False)
 
 
-def run_reserve_loss_analysis(db, prewarm=False):
+def run_reserve_loss_analysis(db, prewarm=False, reserve_id: str | None = None):
+
+    if reserve_id:
+        reserves = db.execute(
+            text("""
+                SELECT reserve_id, name, ST_AsGeoJSON(geometry)
+                FROM forest_reserves
+                WHERE reserve_id = :rid
+            """),
+            {"rid": reserve_id},
+        ).fetchall()
+        if not reserves:
+            return []
+    else:
+        reserves = db.execute(text("""
+            SELECT reserve_id, name, ST_AsGeoJSON(geometry)
+            FROM forest_reserves
+        """)).fetchall()
 
     initialize_ee()
-
-    reserves = db.execute(text("""
-        SELECT reserve_id, name, ST_AsGeoJSON(geometry)
-        FROM forest_reserves
-    """)).fetchall()
 
     results = []
 
