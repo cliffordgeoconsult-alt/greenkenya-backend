@@ -762,6 +762,12 @@ def _reserve_gee_core(name, geojson, prewarm=False):
     }
 
 
+@redis_cache("reserve_analysis_prewarm", ttl=7 * 86400)
+def process_reserve_prewarm_cached(reserve_id, name, geojson):
+    """Hansen + RADD path without Dynamic World; cached so forest bundle skips repeat GEE."""
+    return _reserve_gee_core(name, geojson, prewarm=True)
+
+
 @redis_cache("reserve_analysis", ttl=3600)
 def process_reserve_cached(reserve_id, name, geojson):
     return _reserve_gee_core(name, geojson, prewarm=False)
@@ -787,7 +793,7 @@ def run_reserve_loss_analysis(db, prewarm=False):
         ee_geom = ee.Geometry(geojson)
 
         if prewarm:
-            cached = _reserve_gee_core(name, geojson, prewarm=True)
+            cached = process_reserve_prewarm_cached(str(reserve_id), name, geojson)
         else:
             cached = process_reserve_cached(reserve_id, name, geojson)
 

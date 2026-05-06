@@ -1,5 +1,5 @@
 # app/services/uhi_prewarm_service.py
-"""Batch warm UHI Redis caches for pilot counties, wards, and intersecting forest reserves."""
+"""Batch warm UHI Redis caches for pilot counties, wards, and county forest-reserve-union LST."""
 from __future__ import annotations
 
 import traceback
@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.core.redis_client import cache_get, make_cache_key
 from app.services import uhi_service
 from app.services.admin_service import (
-    get_forest_reserves_intersecting_uhi_counties,
+    count_forest_reserves_intersecting_uhi_counties,
     get_uhi_counties,
     get_uhi_wards,
 )
@@ -23,6 +23,7 @@ from app.services.gee.uhi_analysis import (
     UHI_MIN_YEAR,
 )
 from app.services.uhi_report_service import (
+    _forest_union_geojson,
     _full_county_report_cache_key,
     _full_ward_report_cache_key,
     _norm_geojson,
@@ -48,8 +49,9 @@ def run_uhi_prewarm(
     """
     Populate Redis for UHI pilot scope.
     - Full county & ward reports: one cached payload each (reuses inner GEE caches).
-    - Forest reserves intersecting UHI counties: forest-baseline LST per reserve/year.
+    - Forest baseline LST: one merged union per pilot county × year (matches UHI reports).
     - Optional LST tile mapIds (heavy); skipped by default.
+    Per-reserve Hansen/RADD prewarm lives in the forest Celery bundle, not here.
     """
     now_y = datetime.now().year
     y0 = max(UHI_MIN_YEAR, int(start_year))
@@ -59,6 +61,11 @@ def run_uhi_prewarm(
 
     years = list(range(y0, y1 + 1))
     initialize_ee()
+
+    print(
+        f"🏙️ UHI prewarm: years {years[0]}–{years[-1]} "
+        f"(n={len(years)}), counties/wards to follow"
+    )
 
     stats: dict[str, Any] = {
         "years": years,
@@ -75,6 +82,9 @@ def run_uhi_prewarm(
 
     counties = get_uhi_counties(db)
     wards = get_uhi_wards(db)
+    print(
+        f"🏙️ UHI prewarm: {len(counties)} pilot counties, {len(wards)} pilot wards"
+    )
 
     # --- County full reports (includes ward metrics table + merged hotspots for that year)
     for c in counties:
@@ -89,6 +99,7 @@ def run_uhi_prewarm(
                 ):
                     stats["county_reports_skipped"] += 1
                     continue
+                print(f"🏙️ UHI prewarm: computing county report {cid} year={y}")
                 county_uhi_report(db, cid, y, force_refresh=force_refresh)
                 stats["county_reports_computed"] += 1
             except Exception:
@@ -114,6 +125,7 @@ def run_uhi_prewarm(
                 ):
                     stats["ward_reports_skipped"] += 1
                     continue
+                print(f"🏙️ UHI prewarm: computing ward report {wid} year={y}")
                 ward_uhi_report(db, wid, y, force_refresh=force_refresh)
                 stats["ward_reports_computed"] += 1
             except Exception:
@@ -126,12 +138,14 @@ def run_uhi_prewarm(
                     }
                 )
 
-    # --- Per-reserve forest baseline LST (same cache key as compute_forest_baseline_lst_day)
+    # --- County merged forest-reserve union → MOD11A2 day LST baseline (same as UHI reports)
     if include_forest_baselines:
-        reserves = get_forest_reserves_intersecting_uhi_counties(db)
-        stats["forest_reserve_count"] = len(reserves)
-        for r in reserves:
-            gj = _norm_geojson(r["geometry"])
+        for c in counties:
+            cid = str(c["id"])
+            fgj = _forest_union_geojson(db, cid)
+            if not fgj:
+                continue
+            gj = _norm_geojson(fgj)
             for y in years:
                 fk = _forest_baseline_cache_key(gj, y)
                 try:
@@ -142,13 +156,16 @@ def run_uhi_prewarm(
                     ):
                         stats["forest_baselines_skipped"] += 1
                         continue
+                    print(
+                        f"🏙️ UHI prewarm: forest union baseline county={cid} year={y}"
+                    )
                     compute_forest_baseline_lst_day(gj, y)
                     stats["forest_baselines_computed"] += 1
                 except Exception:
                     stats["errors"].append(
                         {
-                            "step": "forest_baseline",
-                            "reserve_id": r["id"],
+                            "step": "forest_baseline_union",
+                            "county_id": cid,
                             "year": y,
                             "detail": traceback.format_exc(limit=6),
                         }
@@ -209,6 +226,12 @@ def run_uhi_prewarm(
 
     stats["errors"] = stats["errors"][:80]
     stats["ok"] = len(stats["errors"]) == 0
+    print(
+        f"🏙️ UHI prewarm done: ok={stats['ok']} "
+        f"county +{stats['county_reports_computed']}/−{stats['county_reports_skipped']} "
+        f"ward +{stats['ward_reports_computed']}/−{stats['ward_reports_skipped']} "
+        f"baselines +{stats['forest_baselines_computed']}/−{stats['forest_baselines_skipped']}"
+    )
     return stats
 
 
@@ -228,7 +251,7 @@ def uhi_prewarm_status(
     years = list(range(y0, y1 + 1))
     counties = get_uhi_counties(db)
     wards = get_uhi_wards(db)
-    reserves = get_forest_reserves_intersecting_uhi_counties(db)
+    reserve_intersect_count = count_forest_reserves_intersecting_uhi_counties(db)
 
     county_cached = 0
     county_total = len(counties) * len(years)
@@ -247,10 +270,15 @@ def uhi_prewarm_status(
                 ward_cached += 1
 
     forest_cached = 0
-    forest_total = len(reserves) * len(years)
-    for r in reserves:
-        gj = _norm_geojson(r["geometry"])
+    forest_total = 0
+    for c in counties:
+        cid = str(c["id"])
+        fgj = _forest_union_geojson(db, cid)
+        if not fgj:
+            continue
+        gj = _norm_geojson(fgj)
         for y in years:
+            forest_total += 1
             if cache_get(_forest_baseline_cache_key(gj, y)) is not None:
                 forest_cached += 1
 
@@ -258,20 +286,21 @@ def uhi_prewarm_status(
         "years": years,
         "pilot_counties": len(counties),
         "pilot_wards": len(wards),
-        "forest_reserves_intersecting_pilot": len(reserves),
+        "forest_reserves_intersecting_pilot": reserve_intersect_count,
+        "forest_baseline_scope": "county_merged_reserve_union_modis_lst",
         "full_county_reports": {
             "cached": county_cached,
             "total": county_total,
-            "complete": county_cached >= county_total and county_total > 0,
+            "complete": county_total == 0 or county_cached >= county_total,
         },
         "full_ward_reports": {
             "cached": ward_cached,
             "total": ward_total,
-            "complete": ward_cached >= ward_total and ward_total > 0,
+            "complete": ward_total == 0 or ward_cached >= ward_total,
         },
         "forest_baselines": {
             "cached": forest_cached,
             "total": forest_total,
-            "complete": forest_cached >= forest_total and forest_total > 0,
+            "complete": forest_total == 0 or forest_cached >= forest_total,
         },
     }

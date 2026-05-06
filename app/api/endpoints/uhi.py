@@ -40,8 +40,36 @@ def uhi_prewarm_status_endpoint(
     return uhi_prewarm_status(db, start_year=start_year, end_year=ey)
 
 
-@router.api_route("/prewarm", methods=["GET", "POST"])
-def uhi_prewarm_run(
+def _run_uhi_prewarm_from_query(
+    *,
+    db: Session,
+    start_year: int,
+    end_year: Optional[int],
+    skip_if_cached: bool,
+    force_refresh: bool,
+    include_forest_baselines: bool,
+    include_tiles: bool,
+):
+    initialize_ee()
+    now_y = datetime.now().year
+    ey = end_year if end_year is not None else now_y
+    return run_uhi_prewarm(
+        db,
+        start_year=start_year,
+        end_year=ey,
+        skip_if_cached=skip_if_cached,
+        force_refresh=force_refresh,
+        include_forest_baselines=include_forest_baselines,
+        include_tiles=include_tiles,
+    )
+
+
+@router.get(
+    "/prewarm",
+    operation_id="uhi_prewarm_run_get",
+    summary="Run UHI prewarm (GET)",
+)
+def uhi_prewarm_run_get(
     start_year: int = Query(2000, ge=2000),
     end_year: Optional[int] = Query(None, ge=2000),
     skip_if_cached: bool = Query(
@@ -60,16 +88,48 @@ def uhi_prewarm_run(
     db: Session = Depends(get_db),
 ):
     """
-    Warm UHI caches for all pilot counties, their wards, and forest reserves intersecting those counties.
+    Warm UHI caches for all pilot counties, their wards, and county merged forest-reserve-union LST baselines.
     Uses full-report Redis so repeat runs are cheap when skip_if_cached=true. May take several minutes.
     """
-    initialize_ee()
-    now_y = datetime.now().year
-    ey = end_year if end_year is not None else now_y
-    return run_uhi_prewarm(
-        db,
+    return _run_uhi_prewarm_from_query(
+        db=db,
         start_year=start_year,
-        end_year=ey,
+        end_year=end_year,
+        skip_if_cached=skip_if_cached,
+        force_refresh=force_refresh,
+        include_forest_baselines=include_forest_baselines,
+        include_tiles=include_tiles,
+    )
+
+
+@router.post(
+    "/prewarm",
+    operation_id="uhi_prewarm_run_post",
+    summary="Run UHI prewarm (POST)",
+)
+def uhi_prewarm_run_post(
+    start_year: int = Query(2000, ge=2000),
+    end_year: Optional[int] = Query(None, ge=2000),
+    skip_if_cached: bool = Query(
+        True,
+        description="If true, skip items already present in Redis (fast re-run).",
+    ),
+    force_refresh: bool = Query(
+        False,
+        description="If true, recompute and overwrite full report caches (and baselines/tiles when selected).",
+    ),
+    include_forest_baselines: bool = Query(True),
+    include_tiles: bool = Query(
+        False,
+        description="Also warm LST day/night map tiles (many extra Earth Engine getMapId calls).",
+    ),
+    db: Session = Depends(get_db),
+):
+    """Same as GET; POST is preferred for long-running cache warms."""
+    return _run_uhi_prewarm_from_query(
+        db=db,
+        start_year=start_year,
+        end_year=end_year,
         skip_if_cached=skip_if_cached,
         force_refresh=force_refresh,
         include_forest_baselines=include_forest_baselines,

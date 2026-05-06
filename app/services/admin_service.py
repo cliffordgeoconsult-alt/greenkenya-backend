@@ -252,7 +252,7 @@ def get_uhi_counties(db: Session):
 def get_forest_reserves_intersecting_uhi_counties(db: Session) -> list[dict]:
     """Distinct forest reserves whose geometry intersects any UHI pilot county."""
     query = """
-    SELECT DISTINCT r.id, ST_AsGeoJSON(r.geometry) AS gj
+    SELECT DISTINCT r.reserve_id, ST_AsGeoJSON(r.geometry) AS gj
     FROM forest_reserves r
     INNER JOIN admin_county c ON ST_Intersects(r.geometry, c.geometry)
     WHERE UPPER(c.name) = ANY(:county_names)
@@ -261,7 +261,23 @@ def get_forest_reserves_intersecting_uhi_counties(db: Session) -> list[dict]:
         text(query),
         {"county_names": UHI_TARGET_COUNTIES},
     )
-    return [{"id": str(row.id), "geometry": row.gj} for row in result]
+    return [
+        {"reserve_id": str(row.reserve_id), "geometry": row.gj} for row in result
+    ]
+
+
+def count_forest_reserves_intersecting_uhi_counties(db: Session) -> int:
+    """Count reserves intersecting UHI pilot counties (no geometry payload)."""
+    row = db.execute(
+        text("""
+            SELECT COUNT(DISTINCT r.reserve_id)
+            FROM forest_reserves r
+            INNER JOIN admin_county c ON ST_Intersects(r.geometry, c.geometry)
+            WHERE UPPER(c.name) = ANY(:county_names)
+        """),
+        {"county_names": UHI_TARGET_COUNTIES},
+    ).scalar()
+    return int(row or 0)
 
 
 def get_uhi_wards(db: Session):
