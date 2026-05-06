@@ -12,7 +12,11 @@ from app.services.gee.uhi_analysis import (
     get_uhi_lst_day_tile_url,
     get_uhi_lst_night_tile_url,
 )
-from app.services.uhi_report_service import county_uhi_report, ward_uhi_report
+from app.services.uhi_report_service import (
+    county_uhi_report,
+    county_wards_metrics_table,
+    ward_uhi_report,
+)
 
 router = APIRouter()
 
@@ -44,8 +48,19 @@ def uhi_county_report(
     year: Optional[int] = Query(None, ge=2000, le=2100),
     db: Session = Depends(get_db),
 ):
-    """Full UHI intelligence: trends, risk, forest baseline, tiles metadata, hotspots."""
+    """Full UHI intelligence: ward tables, worst wards, merged priority zones (county grid + worst wards), trends."""
     return county_uhi_report(db, county_id, _year_or_default(year))
+
+
+@router.get("/county/{county_id}/wards/metrics")
+def uhi_county_wards_metrics(
+    county_id: str,
+    year: Optional[int] = Query(None, ge=2000, le=2100),
+    db: Session = Depends(get_db),
+):
+    """Per-ward LST, green cover (Dynamic World), built-up, UHI vs forest, heat risk; includes worst_wards_top_10."""
+    initialize_ee()
+    return county_wards_metrics_table(db, county_id, _year_or_default(year))
 
 
 @router.get("/ward/{ward_id}/report")

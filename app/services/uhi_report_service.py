@@ -246,7 +246,7 @@ def build_uhi_year_snapshot(
         )
         base["temperature"] = None
         base["uhi"] = None
-        base["vegetation"] = None
+        base["vegetation"] = {"ndvi": None, "green_cover_percent": None}
         base["urbanization"] = None
         base["livability"] = None
         base["risk"] = None
@@ -269,7 +269,11 @@ def build_uhi_year_snapshot(
         base["message"] = _humane_building_message("incomplete")
         base["temperature"] = None
         base["uhi"] = None
-        base["vegetation"] = {"ndvi": ndvi, "cooling_effect_per_10pct": None}
+        base["vegetation"] = {
+            "ndvi": ndvi,
+            "green_cover_percent": m.get("green_cover_percent"),
+            "cooling_effect_per_10pct": None,
+        }
         base["urbanization"] = {
             "built_up_percent": round(float(built_p) * 100, 1)
             if built_p is not None
@@ -336,7 +340,7 @@ def build_uhi_year_snapshot(
                 float(built_p) - float(base_m["built_probability_mean"]), 4
             )
 
-    hs = compute_uhi_hotspots(geojson_norm, y)
+    hs = compute_uhi_hotspots(geojson_norm, y, max_priority_zones=10)
     hotspots_out: list[dict[str, Any]] = []
     if not hs.get("error"):
         for p in hs.get("priority_zones") or []:
@@ -345,6 +349,9 @@ def build_uhi_year_snapshot(
                     "rank": p.get("rank"),
                     "priority": p.get("priority"),
                     "mean_lst_day_c": p.get("mean_lst_day_c"),
+                    "mean_ndvi": p.get("mean_ndvi"),
+                    "built_up_percent": p.get("built_up_percent"),
+                    "green_cover_percent": p.get("green_cover_percent"),
                     "geometry": p.get("geometry"),
                 }
             )
@@ -392,8 +399,10 @@ def build_uhi_year_snapshot(
         "intensity": uhi_intensity,
         "baseline": baseline_label,
     }
+    gcp = m.get("green_cover_percent")
     base["vegetation"] = {
         "ndvi": round(ndvi_f, 4) if ndvi_f is not None else None,
+        "green_cover_percent": gcp,
         "cooling_effect_per_10pct": cooling_val,
     }
     base["urbanization"] = {"built_up_percent": built_pct}
@@ -572,8 +581,178 @@ def _yearly_built_green_series(
             row["ndvi_mean"] = m["ndvi_mean"]
         if m.get("built_probability_mean") is not None:
             row["built_up_percent"] = round(float(m["built_probability_mean"]) * 100, 2)
+        if m.get("green_cover_percent") is not None:
+            row["green_cover_percent"] = m["green_cover_percent"]
         ys.append(row)
     return ys
+
+
+def _zone_dedupe_key(geometry: dict) -> tuple[float, float]:
+    ring = geometry.get("coordinates") or [[]]
+    pts = ring[0] if ring else []
+    if not pts:
+        return (0.0, 0.0)
+    xs = [float(p[0]) for p in pts if isinstance(p, (list, tuple)) and len(p) >= 2]
+    ys = [float(p[1]) for p in pts if isinstance(p, (list, tuple)) and len(p) >= 2]
+    if not xs:
+        return (0.0, 0.0)
+    cx = sum(xs) / len(xs)
+    cy = sum(ys) / len(ys)
+    q = 750.0
+    return (round(cx / q) * q, round(cy / q) * q)
+
+
+def merge_county_priority_zones(
+    county_hs: dict[str, Any],
+    db: Session,
+    county_id: str,
+    year: int,
+    worst_ward_rows: list[dict[str, Any]],
+    max_zones: int = 10,
+) -> list[dict[str, Any]]:
+    """County grid hotspots plus top cells from worst wards; dedupe by coarse footprint."""
+    candidates: list[dict[str, Any]] = []
+    if not county_hs.get("error"):
+        for p in county_hs.get("priority_zones") or []:
+            row = {k: v for k, v in p.items() if k != "rank"}
+            row["source"] = "county_grid"
+            candidates.append(row)
+    for wrow in worst_ward_rows[:10]:
+        wid = wrow.get("ward_id")
+        wname = wrow.get("name")
+        if not wid:
+            continue
+        wgeom = None
+        for w in get_uhi_wards(db):
+            if str(w["county_id"]) != str(county_id) or str(w["id"]) != str(wid):
+                continue
+            wgeom = w["geometry"]
+            break
+        if not wgeom:
+            continue
+        whs = compute_uhi_hotspots(
+            _norm_geojson(wgeom), year, max_priority_zones=5
+        )
+        if whs.get("error"):
+            continue
+        for p in (whs.get("priority_zones") or [])[:2]:
+            row = {k: v for k, v in p.items() if k != "rank"}
+            row["source"] = "ward_hotspot"
+            row["source_ward_id"] = str(wid)
+            row["source_ward_name"] = wname
+            candidates.append(row)
+
+    candidates.sort(
+        key=lambda x: float(x.get("mean_lst_day_c") or 0.0), reverse=True
+    )
+    deduped: list[dict[str, Any]] = []
+    keys: set[tuple[float, float]] = set()
+    for c in candidates:
+        g = c.get("geometry")
+        if not g:
+            continue
+        key = _zone_dedupe_key(g)
+        if key in keys:
+            continue
+        keys.add(key)
+        deduped.append(c)
+        if len(deduped) >= max_zones:
+            break
+    for i, z in enumerate(deduped, start=1):
+        z["rank"] = i
+        z["priority"] = (
+            "CRITICAL" if i <= 3 else "HIGH" if i <= 7 else "ELEVATED"
+        )
+    return deduped
+
+
+def county_wards_metrics_table(
+    db: Session, county_id: str, year: int
+) -> dict[str, Any]:
+    """Per-ward zonal metrics (MODIS + Dynamic World) for one pilot county."""
+    counties = get_uhi_counties(db)
+    county = next((c for c in counties if str(c["id"]) == str(county_id)), None)
+    if not county:
+        return {
+            "year": year,
+            "county_id": str(county_id),
+            "error": "county_not_in_uhi_pilot",
+            "wards": [],
+            "worst_wards_top_10": [],
+        }
+    fgj = _forest_union_geojson(db, str(county_id))
+    forest_baseline: Optional[float] = None
+    if fgj:
+        fb = compute_forest_baseline_lst_day(_norm_geojson(fgj), year)
+        if fb.get("lst_day_forest_mean_c") is not None:
+            forest_baseline = float(fb["lst_day_forest_mean_c"])
+
+    rows: list[dict[str, Any]] = []
+    for w in get_uhi_wards(db):
+        if str(w["county_id"]) != str(county_id):
+            continue
+        m = compute_uhi_zonal_metrics(_norm_geojson(w["geometry"]), year)
+        if m.get("error"):
+            rows.append(
+                {
+                    "ward_id": str(w["id"]),
+                    "name": w["name"],
+                    "county_id": str(county_id),
+                    "year": year,
+                    "status": "no_data",
+                    "message": m.get("error"),
+                }
+            )
+            continue
+        lst = m.get("lst_day_mean_c")
+        ndvi = m.get("ndvi_mean")
+        built = m.get("built_probability_mean")
+        green_pct = m.get("green_cover_percent")
+        built_pct = round(float(built) * 100, 1) if built is not None else None
+        uhi_i = None
+        if forest_baseline is not None and lst is not None:
+            uhi_i = round(float(lst) - forest_baseline, 2)
+        risk_s = None
+        risk_lv = None
+        if ndvi is not None and lst is not None:
+            risk_s = _heat_risk_score(
+                float(lst),
+                float(built) if built is not None else None,
+                float(ndvi),
+            )
+            risk_lv = _risk_level(risk_s)
+        rows.append(
+            {
+                "ward_id": str(w["id"]),
+                "name": w["name"],
+                "county_id": str(county_id),
+                "year": year,
+                "status": "complete",
+                "lst_day_mean_c": lst,
+                "lst_night_mean_c": m.get("lst_night_mean_c"),
+                "ndvi_mean": m.get("ndvi_mean"),
+                "green_cover_percent": green_pct,
+                "built_up_percent": built_pct,
+                "uhi_intensity_vs_forest_c": uhi_i,
+                "heat_risk_score": risk_s,
+                "heat_risk_level": risk_lv,
+            }
+        )
+    complete = [r for r in rows if r.get("status") == "complete"]
+    worst = sorted(
+        complete,
+        key=lambda x: (
+            x.get("heat_risk_score") is None,
+            -(x.get("heat_risk_score") or 0),
+        ),
+    )[:10]
+    return {
+        "year": year,
+        "county_id": str(county_id),
+        "county_name": county["name"],
+        "wards": rows,
+        "worst_wards_top_10": worst,
+    }
 
 
 def ward_uhi_report(db: Session, ward_id: str, year: int) -> dict[str, Any]:
@@ -597,7 +776,7 @@ def ward_uhi_report(db: Session, ward_id: str, year: int) -> dict[str, Any]:
     cool = county_vegetation_cooling_slope(db, str(ward["county_id"]), year)
     era = compute_era5_livability_percent(g, year)
     yearly = _yearly_built_green_series(g, year)
-    hs = compute_uhi_hotspots(g, year)
+    hs = compute_uhi_hotspots(g, year, max_priority_zones=10)
 
     months_block: Optional[list[dict[str, Any]]] = None
     if year == datetime.now().year:
@@ -627,7 +806,9 @@ def ward_uhi_report(db: Session, ward_id: str, year: int) -> dict[str, Any]:
     out["yearly_greening_built"] = yearly
     out["monthly"] = months_block
     if not hs.get("error"):
-        out["priority_zones"] = hs.get("priority_zones", [])
+        pz = list(hs.get("priority_zones") or [])
+        out["priority_zones"] = pz
+        out["hotspots"] = pz
     if m.get("built_probability_mean") is not None:
         ur = dict(out.get("urbanization") or {})
         ur["built_probability_mean"] = m["built_probability_mean"]
@@ -651,7 +832,7 @@ def county_uhi_report(db: Session, county_id: str, year: int) -> dict[str, Any]:
     cool = county_vegetation_cooling_slope(db, str(county_id), year)
     era = compute_era5_livability_percent(g, year)
     yearly = _yearly_built_green_series(g, year)
-    hs = compute_uhi_hotspots(g, year)
+    hs = compute_uhi_hotspots(g, year, max_priority_zones=10)
 
     months_block: Optional[list[dict[str, Any]]] = None
     if year == datetime.now().year:
@@ -680,8 +861,28 @@ def county_uhi_report(db: Session, county_id: str, year: int) -> dict[str, Any]:
 
     out["yearly_greening_built"] = yearly
     out["monthly"] = months_block
-    if not hs.get("error"):
-        out["priority_zones"] = hs.get("priority_zones", [])
+    ward_tbl = county_wards_metrics_table(db, str(county_id), year)
+    merged: list[dict[str, Any]] = []
+    if not ward_tbl.get("error"):
+        out["wards"] = ward_tbl["wards"]
+        out["worst_wards_top_10"] = ward_tbl["worst_wards_top_10"]
+        merged = merge_county_priority_zones(
+            hs,
+            db,
+            str(county_id),
+            year,
+            list(ward_tbl["worst_wards_top_10"]),
+        )
+    else:
+        out["wards"] = []
+        out["worst_wards_top_10"] = []
+    if merged:
+        out["priority_zones"] = merged
+        out["hotspots"] = merged
+    elif not hs.get("error"):
+        pz = list(hs.get("priority_zones") or [])
+        out["priority_zones"] = pz
+        out["hotspots"] = pz
     if m.get("built_probability_mean") is not None:
         ur = dict(out.get("urbanization") or {})
         ur["built_probability_mean"] = m["built_probability_mean"]
