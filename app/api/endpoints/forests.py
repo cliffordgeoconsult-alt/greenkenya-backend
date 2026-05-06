@@ -334,10 +334,19 @@ def start_prewarm(db: Session = Depends(get_db)):
 
     counties = get_counties(db)
     wards = get_wards(db)
+    reserve_rows = db.execute(text("SELECT COUNT(*) FROM forest_reserves")).scalar()
+    reserve_count = int(reserve_rows or 0)
 
     return {
         "status": "prewarm started in background",
         "mode": "single_task",
         "counties": len(counties),
         "wards": len(wards),
+        "forest_reserves_in_db": reserve_count,
+        "queued_steps": [
+            "county_vegetation_prewarm",
+            "ward_vegetation_prewarm",
+            "all_reserve_loss_prewarm",
+            "chained_uhi_prewarm",
+        ],
     }

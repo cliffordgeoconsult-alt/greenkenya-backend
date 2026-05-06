@@ -1,6 +1,9 @@
+import logging
 from datetime import datetime
 
 from app.core.celery_app import celery
+
+_log = logging.getLogger(__name__)
 from app.core.prewarm_context import prewarm_bundle_begin, prewarm_bundle_end
 from app.services.forest_intelligence_service import (
     run_vegetation_analysis,
@@ -18,8 +21,8 @@ from app.agent_debug_log import agent_debug_log
 @celery.task(bind=True, autoretry_for=(Exception,), retry_backoff=5, retry_kwargs={'max_retries': 3})
 def prewarm_forests_bundle(self):
     """
-    Single worker run: one EE handshake, then Hansen-only prewarm for target counties,
-    their wards (already filtered in admin queries), and all reserves.
+    Single worker run: one EE handshake, then Hansen/RADD prewarm for target counties,
+    their wards, all forest_reserves rows, then chained UHI prewarm (same Redis skip rules).
     """
     db = SessionLocal()
     prewarm_bundle_begin()
@@ -42,7 +45,25 @@ def prewarm_forests_bundle(self):
             run_vegetation_analysis(db, "county", c["id"], prewarm=True)
         for w in wards:
             run_ward_vegetation_analysis(db, w["id"], prewarm=True)
+        _log.warning(
+            "🌲 Forest bundle: prewarming all forest_reserves (run_reserve_loss_analysis)"
+        )
         run_reserve_loss_analysis(db, prewarm=True)
+        _log.warning("🌲 Forest bundle: reserves step finished; starting chained UHI prewarm")
+        try:
+            now_y = datetime.now().year
+            run_uhi_prewarm(
+                db,
+                start_year=UHI_MIN_YEAR,
+                end_year=now_y,
+                skip_if_cached=True,
+                force_refresh=False,
+                include_forest_baselines=True,
+                include_tiles=False,
+            )
+        except Exception:
+            _log.exception("🏙️ Chained UHI prewarm after forest bundle failed (forest steps completed)")
+        _log.warning("🌲 Forest bundle + chained UHI: all steps finished")
         # #region agent log
         agent_debug_log("H3", "prewarm_tasks.prewarm_forests_bundle", "bundle_complete", {})
         # #endregion
@@ -89,6 +110,7 @@ def prewarm_uhi_bundle(self):
     """
     db = SessionLocal()
     try:
+        _log.warning("🏙️ Celery task prewarm_uhi_bundle started")
         now_y = datetime.now().year
         return run_uhi_prewarm(
             db,

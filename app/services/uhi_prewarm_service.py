@@ -2,6 +2,7 @@
 """Batch warm UHI Redis caches for pilot counties, wards, and county forest-reserve-union LST."""
 from __future__ import annotations
 
+import logging
 import traceback
 from datetime import datetime
 from typing import Any
@@ -30,6 +31,8 @@ from app.services.uhi_report_service import (
     county_uhi_report,
     ward_uhi_report,
 )
+
+_log = logging.getLogger(__name__)
 
 
 def _forest_baseline_cache_key(geojson_norm: str, year: int) -> str:
@@ -62,9 +65,13 @@ def run_uhi_prewarm(
     years = list(range(y0, y1 + 1))
     initialize_ee()
 
-    print(
-        f"🏙️ UHI prewarm: years {years[0]}–{years[-1]} "
-        f"(n={len(years)}), counties/wards to follow"
+    _log.warning(
+        "🏙️ UHI prewarm START: years %s–%s (n=%s) skip_if_cached=%s force_refresh=%s",
+        years[0],
+        years[-1],
+        len(years),
+        skip_if_cached,
+        force_refresh,
     )
 
     stats: dict[str, Any] = {
@@ -82,13 +89,18 @@ def run_uhi_prewarm(
 
     counties = get_uhi_counties(db)
     wards = get_uhi_wards(db)
-    print(
-        f"🏙️ UHI prewarm: {len(counties)} pilot counties, {len(wards)} pilot wards"
+    _log.warning(
+        "🏙️ UHI prewarm: scope %s pilot counties, %s pilot wards",
+        len(counties),
+        len(wards),
     )
 
     # --- County full reports (includes ward metrics table + merged hotspots for that year)
     for c in counties:
         cid = str(c["id"])
+        cname = c.get("name", "")
+        c_comp = 0
+        c_skip = 0
         for y in years:
             ck = _full_county_report_cache_key(cid, y)
             try:
@@ -98,10 +110,17 @@ def run_uhi_prewarm(
                     and cache_get(ck) is not None
                 ):
                     stats["county_reports_skipped"] += 1
+                    c_skip += 1
                     continue
-                print(f"🏙️ UHI prewarm: computing county report {cid} year={y}")
+                _log.warning(
+                    "🏙️ UHI prewarm PRECOMPUTE county_report %s (%s) year=%s",
+                    cid,
+                    cname,
+                    y,
+                )
                 county_uhi_report(db, cid, y, force_refresh=force_refresh)
                 stats["county_reports_computed"] += 1
+                c_comp += 1
             except Exception:
                 stats["errors"].append(
                     {
@@ -111,10 +130,21 @@ def run_uhi_prewarm(
                         "detail": traceback.format_exc(limit=6),
                     }
                 )
+        if c_comp or c_skip:
+            _log.warning(
+                "🏙️ UHI prewarm county %s (%s): precomputed %s yr, skipped_cached %s yr",
+                cid,
+                cname,
+                c_comp,
+                c_skip,
+            )
 
     # --- Ward full reports (ward-level priority zones, etc.)
     for w in wards:
         wid = str(w["id"])
+        wname = w.get("name", "")
+        w_comp = 0
+        w_skip = 0
         for y in years:
             wk = _full_ward_report_cache_key(wid, y)
             try:
@@ -124,10 +154,17 @@ def run_uhi_prewarm(
                     and cache_get(wk) is not None
                 ):
                     stats["ward_reports_skipped"] += 1
+                    w_skip += 1
                     continue
-                print(f"🏙️ UHI prewarm: computing ward report {wid} year={y}")
+                _log.warning(
+                    "🏙️ UHI prewarm PRECOMPUTE ward_report %s (%s) year=%s",
+                    wid,
+                    wname,
+                    y,
+                )
                 ward_uhi_report(db, wid, y, force_refresh=force_refresh)
                 stats["ward_reports_computed"] += 1
+                w_comp += 1
             except Exception:
                 stats["errors"].append(
                     {
@@ -137,15 +174,31 @@ def run_uhi_prewarm(
                         "detail": traceback.format_exc(limit=6),
                     }
                 )
+        if w_comp or w_skip:
+            _log.warning(
+                "🏙️ UHI prewarm ward %s (%s): precomputed %s yr, skipped_cached %s yr",
+                wid,
+                wname,
+                w_comp,
+                w_skip,
+            )
 
     # --- County merged forest-reserve union → MOD11A2 day LST baseline (same as UHI reports)
     if include_forest_baselines:
         for c in counties:
             cid = str(c["id"])
+            cname = c.get("name", "")
             fgj = _forest_union_geojson(db, cid)
             if not fgj:
+                _log.warning(
+                    "🏙️ UHI prewarm forest_union_baseline: no reserve geometry for county %s (%s) — skip",
+                    cid,
+                    cname,
+                )
                 continue
             gj = _norm_geojson(fgj)
+            b_comp = 0
+            b_skip = 0
             for y in years:
                 fk = _forest_baseline_cache_key(gj, y)
                 try:
@@ -155,12 +208,17 @@ def run_uhi_prewarm(
                         and cache_get(fk) is not None
                     ):
                         stats["forest_baselines_skipped"] += 1
+                        b_skip += 1
                         continue
-                    print(
-                        f"🏙️ UHI prewarm: forest union baseline county={cid} year={y}"
+                    _log.warning(
+                        "🏙️ UHI prewarm PRECOMPUTE forest_union_lst county=%s (%s) year=%s",
+                        cid,
+                        cname,
+                        y,
                     )
                     compute_forest_baseline_lst_day(gj, y)
                     stats["forest_baselines_computed"] += 1
+                    b_comp += 1
                 except Exception:
                     stats["errors"].append(
                         {
@@ -170,6 +228,13 @@ def run_uhi_prewarm(
                             "detail": traceback.format_exc(limit=6),
                         }
                     )
+            _log.warning(
+                "🏙️ UHI prewarm forest_union_lst county %s (%s): precomputed %s yr, skipped_cached %s yr",
+                cid,
+                cname,
+                b_comp,
+                b_skip,
+            )
 
     # --- Map tiles (optional; getMapId cached per geometry+year)
     if include_tiles:
@@ -186,6 +251,11 @@ def run_uhi_prewarm(
                         if cache_get(dk) is not None and cache_get(nk) is not None:
                             stats["tiles_skipped"] += 2
                             continue
+                    _log.warning(
+                        "🏙️ UHI prewarm PRECOMPUTE tiles county=%s year=%s (day+night)",
+                        cid,
+                        y,
+                    )
                     get_uhi_lst_day_tile_url(g, y)
                     get_uhi_lst_night_tile_url(g, y)
                     stats["tiles_computed"] += 2
@@ -211,6 +281,11 @@ def run_uhi_prewarm(
                         if cache_get(dk) is not None and cache_get(nk) is not None:
                             stats["tiles_skipped"] += 2
                             continue
+                    _log.warning(
+                        "🏙️ UHI prewarm PRECOMPUTE tiles ward=%s year=%s (day+night)",
+                        wid,
+                        y,
+                    )
                     get_uhi_lst_day_tile_url(g, y)
                     get_uhi_lst_night_tile_url(g, y)
                     stats["tiles_computed"] += 2
@@ -226,11 +301,18 @@ def run_uhi_prewarm(
 
     stats["errors"] = stats["errors"][:80]
     stats["ok"] = len(stats["errors"]) == 0
-    print(
-        f"🏙️ UHI prewarm done: ok={stats['ok']} "
-        f"county +{stats['county_reports_computed']}/−{stats['county_reports_skipped']} "
-        f"ward +{stats['ward_reports_computed']}/−{stats['ward_reports_skipped']} "
-        f"baselines +{stats['forest_baselines_computed']}/−{stats['forest_baselines_skipped']}"
+    _log.warning(
+        "🏙️ UHI prewarm DONE: ok=%s county +%s/−%s ward +%s/−%s baselines +%s/−%s tiles +%s/−%s errors=%s",
+        stats["ok"],
+        stats["county_reports_computed"],
+        stats["county_reports_skipped"],
+        stats["ward_reports_computed"],
+        stats["ward_reports_skipped"],
+        stats["forest_baselines_computed"],
+        stats["forest_baselines_skipped"],
+        stats["tiles_computed"],
+        stats["tiles_skipped"],
+        len(stats["errors"]),
     )
     return stats
 
