@@ -365,7 +365,11 @@ def build_uhi_year_snapshot(
                 )
 
     partial_note = None
-    if not dw_ok or not era5_ok or ndvi_f is None:
+    dw_catalog_year = m.get("dynamic_world_available")
+    if not era5_ok or ndvi_f is None:
+        base["status"] = "partial"
+        partial_note = _humane_building_message("incomplete")
+    elif dw_catalog_year is True and built_p is None:
         base["status"] = "partial"
         partial_note = _humane_building_message("incomplete")
 
@@ -388,6 +392,8 @@ def build_uhi_year_snapshot(
     )
     if partial_note:
         insights.insert(0, partial_note)
+    if dw_catalog_year is False and m.get("dynamic_world_message"):
+        insights.append(m["dynamic_world_message"])
 
     base["message"] = partial_note
     base["temperature"] = {
@@ -400,12 +406,25 @@ def build_uhi_year_snapshot(
         "baseline": baseline_label,
     }
     gcp = m.get("green_cover_percent")
-    base["vegetation"] = {
+    veg_block: dict[str, Any] = {
         "ndvi": round(ndvi_f, 4) if ndvi_f is not None else None,
         "green_cover_percent": gcp,
         "cooling_effect_per_10pct": cooling_val,
     }
-    base["urbanization"] = {"built_up_percent": built_pct}
+    if dw_catalog_year is False:
+        veg_block["green_cover_percent"] = None
+        veg_block["green_cover_status"] = "unavailable"
+        if m.get("dynamic_world_message"):
+            veg_block["green_cover_message"] = m["dynamic_world_message"]
+    base["vegetation"] = veg_block
+
+    urb_block: dict[str, Any] = {"built_up_percent": built_pct}
+    if dw_catalog_year is False:
+        urb_block["built_up_percent"] = None
+        urb_block["built_up_status"] = "unavailable"
+        if m.get("dynamic_world_message"):
+            urb_block["built_up_message"] = m["dynamic_world_message"]
+    base["urbanization"] = urb_block
     base["livability"] = {"percent_optimal": liv_pct}
     base["risk"] = (
         {"heat_risk_score": risk_s, "level": risk_lv}
@@ -721,23 +740,27 @@ def county_wards_metrics_table(
                 float(ndvi),
             )
             risk_lv = _risk_level(risk_s)
-        rows.append(
-            {
-                "ward_id": str(w["id"]),
-                "name": w["name"],
-                "county_id": str(county_id),
-                "year": year,
-                "status": "complete",
-                "lst_day_mean_c": lst,
-                "lst_night_mean_c": m.get("lst_night_mean_c"),
-                "ndvi_mean": m.get("ndvi_mean"),
-                "green_cover_percent": green_pct,
-                "built_up_percent": built_pct,
-                "uhi_intensity_vs_forest_c": uhi_i,
-                "heat_risk_score": risk_s,
-                "heat_risk_level": risk_lv,
-            }
-        )
+        row_data: dict[str, Any] = {
+            "ward_id": str(w["id"]),
+            "name": w["name"],
+            "county_id": str(county_id),
+            "year": year,
+            "status": "complete",
+            "lst_day_mean_c": lst,
+            "lst_night_mean_c": m.get("lst_night_mean_c"),
+            "ndvi_mean": m.get("ndvi_mean"),
+            "green_cover_percent": green_pct,
+            "built_up_percent": built_pct,
+            "uhi_intensity_vs_forest_c": uhi_i,
+            "heat_risk_score": risk_s,
+            "heat_risk_level": risk_lv,
+        }
+        if m.get("dynamic_world_available") is False:
+            row_data["built_up_status"] = "unavailable"
+            row_data["green_cover_status"] = "unavailable"
+            if m.get("dynamic_world_message"):
+                row_data["dynamic_world_message"] = m["dynamic_world_message"]
+        rows.append(row_data)
     complete = [r for r in rows if r.get("status") == "complete"]
     worst = sorted(
         complete,

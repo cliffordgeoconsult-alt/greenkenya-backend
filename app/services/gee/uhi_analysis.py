@@ -11,6 +11,19 @@ from app.core.cache import redis_cache
 
 UHI_MIN_YEAR = 2000
 
+# GOOGLE/DYNAMICWORLD/V1 begins 2015-06-27 — no meaningful annual DW composite before 2015.
+DYNAMIC_WORLD_MIN_YEAR = 2015
+
+DYNAMIC_WORLD_UNAVAILABLE_MSG = (
+    "Built-up and green-cover metrics are not available for this year "
+    "(Dynamic World catalog begins mid-2015)."
+)
+
+
+def dynamic_world_metrics_available(year: int) -> bool:
+    return int(year) >= DYNAMIC_WORLD_MIN_YEAR
+
+
 DATA_SOURCES = [
     "MODIS/061/MOD11A2 (LST day/night)",
     "MODIS/061/MOD13A2 (NDVI 1 km)",
@@ -20,8 +33,8 @@ DATA_SOURCES = [
 
 METHODOLOGY_SUMMARY = (
     "LST: annual median MOD11A2 day (primary for UHI) and night, QC-masked. "
-    "NDVI: annual median MOD13A2. Built: mean Dynamic World 'built'. "
-    "Green cover: mean sum of Dynamic World trees, grass, flooded_vegetation, crops, shrub_and_scrub probabilities (×100 as %). "
+    "NDVI: annual median MOD13A2. Built: mean Dynamic World 'built' (not available before 2015). "
+    "Green cover: mean sum of Dynamic World trees, grass, flooded_vegetation, crops, shrub_and_scrub probabilities (×100 as %); unavailable before 2015. "
     "UHI intensity vs forest: mean day LST(entity) − mean day LST(forest reserves ∩ county), when forest exists. "
     "Built-up % is mean built probability × 100. "
     "Livability: share of months where ERA5-Land zonal-mean 2 m T is in [18, 26] °C (climate-scale, ~11 km). "
@@ -91,7 +104,14 @@ def _dynamic_world_built_mean_range(geometry: ee.Geometry, start: str, end: str)
         .filterDate(start, end)
         .select("built")
     )
-    return dw.mean()
+    # Dynamic World starts ~2015; empty collection → .mean() has no bands and breaks addBands.
+    return ee.Image(
+        ee.Algorithms.If(
+            dw.size().gt(0),
+            dw.mean(),
+            ee.Image(0).rename("built"),
+        )
+    )
 
 
 def _dynamic_world_built_mean(geometry: ee.Geometry, year: int) -> ee.Image:
@@ -109,6 +129,13 @@ _DW_GREEN_BANDS = [
 ]
 
 
+def _sum_dynamic_world_green(mean_img: ee.Image) -> ee.Image:
+    green = mean_img.select("trees")
+    for b in _DW_GREEN_BANDS[1:]:
+        green = green.add(mean_img.select(b))
+    return green.rename("green_mean")
+
+
 def _dynamic_world_green_cover_mean_range(
     geometry: ee.Geometry, start: str, end: str
 ) -> ee.Image:
@@ -119,10 +146,14 @@ def _dynamic_world_green_cover_mean_range(
         .select(_DW_GREEN_BANDS)
     )
     mean_img = dw.mean()
-    green = mean_img.select("trees")
-    for b in _DW_GREEN_BANDS[1:]:
-        green = green.add(mean_img.select(b))
-    return green.rename("green_mean")
+    # No DW scenes (years before ~2015, or edge geometry/date) → empty bands; avoid .select crash.
+    return ee.Image(
+        ee.Algorithms.If(
+            dw.size().gt(0),
+            _sum_dynamic_world_green(mean_img),
+            ee.Image(0).rename("green_mean"),
+        )
+    )
 
 
 def _dynamic_world_green_cover_mean(geometry: ee.Geometry, year: int) -> ee.Image:
@@ -131,7 +162,7 @@ def _dynamic_world_green_cover_mean(geometry: ee.Geometry, year: int) -> ee.Imag
     )
 
 
-@redis_cache("uhi_zonal_v4", ttl=43200)
+@redis_cache("uhi_zonal_v6", ttl=43200)
 def compute_uhi_zonal_metrics(geojson_str: str, year: int) -> dict:
     """Day LST mean/min/max, night mean, NDVI mean, built mean. Two reduceRegion calls, one cache."""
     y = int(year)
@@ -142,6 +173,7 @@ def compute_uhi_zonal_metrics(geojson_str: str, year: int) -> dict:
     g = ee.Geometry(json.loads(geojson_str))
     crs_out = "EPSG:4326"
     scale_m = 1000
+    dw_avail = dynamic_world_metrics_available(y)
 
     ld = (
         _modis_lst_annual_median_c(g, y, True)
@@ -163,16 +195,26 @@ def compute_uhi_zonal_metrics(geojson_str: str, year: int) -> dict:
     nd = _modis_ndvi_annual_median(g, y).rename("ndvi").reproject(
         crs=crs_out, scale=scale_m
     )
-    bu = _dynamic_world_built_mean(g, y).rename("built_mean").reproject(
-        crs=crs_out, scale=scale_m
-    )
-    gr = _dynamic_world_green_cover_mean(g, y).rename("green_mean").reproject(
-        crs=crs_out, scale=scale_m
-    )
-    st = ln.addBands(nd).addBands(bu).addBands(gr)
+    if dw_avail:
+        bu = _dynamic_world_built_mean(g, y).rename("built_mean").reproject(
+            crs=crs_out, scale=scale_m
+        )
+        gr = _dynamic_world_green_cover_mean(g, y).rename("green_mean").reproject(
+            crs=crs_out, scale=scale_m
+        )
+        st = ln.addBands(nd).addBands(bu).addBands(gr)
+    else:
+        st = ln.addBands(nd)
     r2 = st.reduceRegion(ee.Reducer.mean(), g, scale_m, maxPixels=1e13).getInfo()
 
-    out: dict[str, Any] = {"year": y}
+    out: dict[str, Any] = {
+        "year": y,
+        "dynamic_world_available": dw_avail,
+    }
+    if not dw_avail:
+        out["built_probability_mean"] = None
+        out["green_cover_percent"] = None
+        out["dynamic_world_message"] = DYNAMIC_WORLD_UNAVAILABLE_MSG
 
     if r1.get("lst_day_c_mean") is not None:
         out["lst_day_mean_c"] = round(float(r1["lst_day_c_mean"]), 3)
@@ -187,12 +229,16 @@ def compute_uhi_zonal_metrics(geojson_str: str, year: int) -> dict:
         out["lst_night_mean_c"] = round(float(r2["lst_night_c"]), 3)
     if r2.get("ndvi") is not None:
         out["ndvi_mean"] = round(float(r2["ndvi"]), 4)
-    if r2.get("built_mean") is not None:
-        out["built_probability_mean"] = round(float(r2["built_mean"]), 4)
-    if r2.get("green_mean") is not None:
-        out["green_cover_percent"] = round(float(r2["green_mean"]) * 100.0, 1)
+    if dw_avail:
+        if r2.get("built_mean") is not None:
+            out["built_probability_mean"] = round(float(r2["built_mean"]), 4)
+        if r2.get("green_mean") is not None:
+            out["green_cover_percent"] = round(float(r2["green_mean"]) * 100.0, 1)
 
-    if len(out) <= 1:
+    if not any(
+        out.get(k) is not None
+        for k in ("lst_day_mean_c", "lst_night_mean_c", "ndvi_mean")
+    ):
         out["error"] = "no_valid_pixels_in_geometry"
     return out
 
@@ -264,7 +310,7 @@ def compute_era5_livability_percent(geojson_str: str, year: int) -> dict:
     }
 
 
-@redis_cache("uhi_monthly_v1", ttl=21600)
+@redis_cache("uhi_monthly_v2", ttl=21600)
 def compute_uhi_monthly_metrics(geojson_str: str, year: int, month: int) -> dict:
     y, m = int(year), int(month)
     now = datetime.now()
@@ -295,16 +341,29 @@ def compute_uhi_monthly_metrics(geojson_str: str, year: int, month: int) -> dict
         .rename("ndvi")
         .reproject(crs=crs_out, scale=scale_m)
     )
-    bu = (
-        _dynamic_world_built_mean_range(g, start, end)
-        .rename("built_mean")
-        .reproject(crs=crs_out, scale=scale_m)
-    )
-    r2 = nd.addBands(bu).reduceRegion(
-        ee.Reducer.mean(), g, scale_m, maxPixels=1e13
-    ).getInfo()
+    dw_avail = dynamic_world_metrics_available(y)
+    if dw_avail:
+        bu = (
+            _dynamic_world_built_mean_range(g, start, end)
+            .rename("built_mean")
+            .reproject(crs=crs_out, scale=scale_m)
+        )
+        r2 = nd.addBands(bu).reduceRegion(
+            ee.Reducer.mean(), g, scale_m, maxPixels=1e13
+        ).getInfo()
+    else:
+        r2 = nd.reduceRegion(
+            ee.Reducer.mean(), g, scale_m, maxPixels=1e13
+        ).getInfo()
 
-    out: dict[str, Any] = {"year": y, "month": m}
+    out: dict[str, Any] = {
+        "year": y,
+        "month": m,
+        "dynamic_world_available": dw_avail,
+    }
+    if not dw_avail:
+        out["built_probability_mean"] = None
+        out["dynamic_world_message"] = DYNAMIC_WORLD_UNAVAILABLE_MSG
     if r1.get("lst_day_c_mean") is not None:
         out["lst_day_mean_c"] = round(float(r1["lst_day_c_mean"]), 3)
     if r1.get("lst_day_c_min") is not None:
@@ -313,9 +372,9 @@ def compute_uhi_monthly_metrics(geojson_str: str, year: int, month: int) -> dict
         out["lst_day_max_c"] = round(float(r1["lst_day_c_max"]), 3)
     if r2.get("ndvi") is not None:
         out["ndvi_mean"] = round(float(r2["ndvi"]), 4)
-    if r2.get("built_mean") is not None:
+    if dw_avail and r2.get("built_mean") is not None:
         out["built_probability_mean"] = round(float(r2["built_mean"]), 4)
-    if len(out) <= 2:
+    if out.get("lst_day_mean_c") is None and out.get("ndvi_mean") is None:
         out["error"] = "no_valid_pixels_in_geometry"
     return out
 
@@ -416,7 +475,7 @@ def _enriched_hotspot_dict(
     return row
 
 
-@redis_cache("uhi_hotspots_v2", ttl=43200)
+@redis_cache("uhi_hotspots_v3", ttl=43200)
 def compute_uhi_hotspots(
     geojson_str: str,
     year: int,
@@ -431,6 +490,7 @@ def compute_uhi_hotspots(
     geometry = ee.Geometry(json.loads(geojson_str))
     crs_out = "EPSG:4326"
     scale_m = 1000
+    dw_avail = dynamic_world_metrics_available(y)
     lst = (
         _modis_lst_annual_median_c(geometry, y, True)
         .rename("lst_day_c")
@@ -439,13 +499,16 @@ def compute_uhi_hotspots(
     ndvi = _modis_ndvi_annual_median(geometry, y).rename("ndvi").reproject(
         crs=crs_out, scale=scale_m
     )
-    built = _dynamic_world_built_mean(geometry, y).rename("built_mean").reproject(
-        crs=crs_out, scale=scale_m
-    )
-    green = _dynamic_world_green_cover_mean(geometry, y).rename("green_mean").reproject(
-        crs=crs_out, scale=scale_m
-    )
-    stack = lst.addBands(ndvi).addBands(built).addBands(green)
+    if dw_avail:
+        built = _dynamic_world_built_mean(geometry, y).rename("built_mean").reproject(
+            crs=crs_out, scale=scale_m
+        )
+        green = _dynamic_world_green_cover_mean(geometry, y).rename(
+            "green_mean"
+        ).reproject(crs=crs_out, scale=scale_m)
+        stack = lst.addBands(ndvi).addBands(built).addBands(green)
+    else:
+        stack = lst.addBands(ndvi)
 
     proj = ee.Projection("EPSG:3857")
     grid = geometry.coveringGrid(proj, grid_m)
@@ -507,9 +570,13 @@ def compute_uhi_hotspots(
             }
         )
 
-    return {
+    out_hs: dict[str, Any] = {
         "hotspots": hotspots[:50],
         "priority_zones": priority,
         "threshold_lst_day_c_p75": round(threshold, 2),
         "grid_cell_m": grid_m,
+        "dynamic_world_available": dw_avail,
     }
+    if not dw_avail:
+        out_hs["dynamic_world_message"] = DYNAMIC_WORLD_UNAVAILABLE_MSG
+    return out_hs
