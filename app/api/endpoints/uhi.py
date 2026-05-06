@@ -12,6 +12,7 @@ from app.services.gee.uhi_analysis import (
     get_uhi_lst_day_tile_url,
     get_uhi_lst_night_tile_url,
 )
+from app.services.uhi_prewarm_service import run_uhi_prewarm, uhi_prewarm_status
 from app.services.uhi_report_service import (
     county_uhi_report,
     county_wards_metrics_table,
@@ -25,6 +26,55 @@ def _year_or_default(year: Optional[int]) -> int:
     if year is None:
         return datetime.now().year - 1
     return year
+
+
+@router.get("/prewarm/status")
+def uhi_prewarm_status_endpoint(
+    start_year: int = Query(2000, ge=2000),
+    end_year: Optional[int] = Query(None, ge=2000),
+    db: Session = Depends(get_db),
+):
+    """Check Redis coverage for full county/ward reports and forest baselines (no Earth Engine)."""
+    now_y = datetime.now().year
+    ey = end_year if end_year is not None else now_y
+    return uhi_prewarm_status(db, start_year=start_year, end_year=ey)
+
+
+@router.api_route("/prewarm", methods=["GET", "POST"])
+def uhi_prewarm_run(
+    start_year: int = Query(2000, ge=2000),
+    end_year: Optional[int] = Query(None, ge=2000),
+    skip_if_cached: bool = Query(
+        True,
+        description="If true, skip items already present in Redis (fast re-run).",
+    ),
+    force_refresh: bool = Query(
+        False,
+        description="If true, recompute and overwrite full report caches (and baselines/tiles when selected).",
+    ),
+    include_forest_baselines: bool = Query(True),
+    include_tiles: bool = Query(
+        False,
+        description="Also warm LST day/night map tiles (many extra Earth Engine getMapId calls).",
+    ),
+    db: Session = Depends(get_db),
+):
+    """
+    Warm UHI caches for all pilot counties, their wards, and forest reserves intersecting those counties.
+    Uses full-report Redis so repeat runs are cheap when skip_if_cached=true. May take several minutes.
+    """
+    initialize_ee()
+    now_y = datetime.now().year
+    ey = end_year if end_year is not None else now_y
+    return run_uhi_prewarm(
+        db,
+        start_year=start_year,
+        end_year=ey,
+        skip_if_cached=skip_if_cached,
+        force_refresh=force_refresh,
+        include_forest_baselines=include_forest_baselines,
+        include_tiles=include_tiles,
+    )
 
 
 @router.get("/counties")

@@ -249,6 +249,21 @@ def get_uhi_counties(db: Session):
     ]
 
 
+def get_forest_reserves_intersecting_uhi_counties(db: Session) -> list[dict]:
+    """Distinct forest reserves whose geometry intersects any UHI pilot county."""
+    query = """
+    SELECT DISTINCT r.id, ST_AsGeoJSON(r.geometry) AS gj
+    FROM forest_reserves r
+    INNER JOIN admin_county c ON ST_Intersects(r.geometry, c.geometry)
+    WHERE UPPER(c.name) = ANY(:county_names)
+    """
+    result = db.execute(
+        text(query),
+        {"county_names": UHI_TARGET_COUNTIES},
+    )
+    return [{"id": str(row.id), "geometry": row.gj} for row in result]
+
+
 def get_uhi_wards(db: Session):
     query = """
     SELECT

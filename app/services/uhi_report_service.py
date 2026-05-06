@@ -7,6 +7,7 @@ import numpy as np
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.redis_client import cache_get, cache_set, make_cache_key
 from app.services.admin_service import get_uhi_counties, get_uhi_wards
 from app.services.gee.ee_init import initialize_ee
 from app.services.gee.uhi_analysis import (
@@ -22,6 +23,22 @@ from app.services.gee.uhi_analysis import (
 
 # Long-horizon trend baseline (MODIS Era consistent; Dynamic World from ~2015).
 TREND_BASE_YEAR = 2001
+
+# UHI reference: matches compute_forest_baseline_lst_day (MOD11A2 day, annual median composite).
+UHI_BASELINE_NONE = "none"
+UHI_BASELINE_FOREST_RESERVES_UNION = "forest_reserves_union_modis_day_lst"
+
+# Full assembled API payloads (county/ward report) — avoids recomputing heavy GEE chains.
+FULL_COUNTY_REPORT_TTL_SEC = 7 * 24 * 3600
+FULL_WARD_REPORT_TTL_SEC = 7 * 24 * 3600
+
+
+def _full_county_report_cache_key(county_id: str, year: int) -> str:
+    return make_cache_key("uhi:full_county_report:v2", (str(county_id), int(year)), {})
+
+
+def _full_ward_report_cache_key(ward_id: str, year: int) -> str:
+    return make_cache_key("uhi:full_ward_report:v2", (str(ward_id), int(year)), {})
 
 
 def _norm_geojson(geojson_string: str) -> str:
@@ -46,6 +63,48 @@ def _forest_union_geojson(db: Session, county_id: str) -> Optional[str]:
     if not row or row[0] is None:
         return None
     return row[0]
+
+
+def _forest_reserves_intersecting_county(
+    db: Session, county_id: str
+) -> list[dict[str, Any]]:
+    rows = db.execute(
+        text("""
+            SELECT r.reserve_id, r.name
+            FROM forest_reserves r
+            INNER JOIN admin_county c
+              ON c.id = CAST(:cid AS uuid)
+              AND ST_Intersects(r.geometry, c.geometry)
+            ORDER BY r.name NULLS LAST, r.reserve_id
+        """),
+        {"cid": county_id},
+    ).fetchall()
+    out: list[dict[str, Any]] = []
+    for rid, name in rows:
+        label = (name or "").strip() or "Unknown"
+        out.append({"reserve_id": str(rid) if rid is not None else "", "name": label})
+    return out
+
+
+def _uhi_baseline_description(
+    year: int, reserves: list[dict[str, Any]], reference_lst_c: float
+) -> str:
+    n = len(reserves)
+    names = [r["name"] for r in reserves if r.get("name")]
+    preview_n = 12
+    head = names[:preview_n]
+    tail = ""
+    if len(names) > preview_n:
+        tail = f" (+{len(names) - preview_n} more)"
+    names_bit = f": {', '.join(head)}{tail}" if head else ""
+
+    return (
+        f"UHI intensity uses MODIS/061/MOD11A2 daytime land-surface temperature "
+        f"(annual median composite for {year}): mean over this boundary minus "
+        f"{reference_lst_c:.1f} °C, the mean over the merged PostGIS geometry of "
+        f"{n} forest reserve record{'s' if n != 1 else ''} in our database that intersect "
+        f"the parent county boundary{names_bit}."
+    )
 
 
 def _risk_level(score: int) -> str:
@@ -148,7 +207,8 @@ def _insights_and_recommendations(
         )
     if uhi_intensity is not None and uhi_intensity > 3:
         insights.append(
-            f"Urban heat island intensity vs forest baseline is about {uhi_intensity:.1f} °C—urban areas read noticeably hotter than nearby forest reference."
+            f"Urban heat island intensity vs the mapped forest-reserve reference (MOD11A2 day LST) "
+            f"is about {uhi_intensity:.1f} °C—this boundary reads noticeably hotter than the merged reserve geometry."
         )
     if risk_level in ("HIGH", "CRITICAL"):
         insights.append(
@@ -200,7 +260,8 @@ def _insights_and_recommendations(
 
     if not forest_ok:
         insights.append(
-            "Forest baseline for UHI intensity is unavailable—no forest reserve geometry intersects this county in our database."
+            "UHI intensity vs a forest-reserve reference is unavailable—no forest reserve polygons "
+            "in our database intersect the parent county boundary."
         )
 
     if not recs:
@@ -295,15 +356,23 @@ def build_uhi_year_snapshot(
     dw_ok = built_p is not None
     built_pct = round(float(built_p) * 100, 1) if dw_ok else None
 
+    forest_reserves = _forest_reserves_intersecting_county(db, str(county_id))
     fgj = _forest_union_geojson(db, str(county_id))
     uhi_intensity: Optional[float] = None
-    baseline_label = "none"
+    baseline_code = UHI_BASELINE_NONE
+    baseline_description: Optional[str] = None
+    reference_lst_c: Optional[float] = None
     forest_ok = bool(fgj)
     if fgj:
         fb = compute_forest_baseline_lst_day(_norm_geojson(fgj), y)
-        if fb.get("lst_day_forest_mean_c") is not None:
-            uhi_intensity = round(lst_day_f - float(fb["lst_day_forest_mean_c"]), 2)
-            baseline_label = "forest"
+        ref = fb.get("lst_day_forest_mean_c")
+        if ref is not None:
+            reference_lst_c = float(ref)
+            uhi_intensity = round(lst_day_f - reference_lst_c, 2)
+            baseline_code = UHI_BASELINE_FOREST_RESERVES_UNION
+            baseline_description = _uhi_baseline_description(
+                y, forest_reserves, reference_lst_c
+            )
 
     cool_reg = county_vegetation_cooling_slope(db, str(county_id), y)
     cooling_val = cool_reg.get("cooling_effect_c_per_10pct_ndvi_proxy")
@@ -401,10 +470,16 @@ def build_uhi_year_snapshot(
         "min": round(float(lst_min), 1) if lst_min is not None else None,
         "max": round(float(lst_max), 1) if lst_max is not None else None,
     }
-    base["uhi"] = {
+    uhi_block: dict[str, Any] = {
         "intensity": uhi_intensity,
-        "baseline": baseline_label,
+        "baseline": baseline_code,
+        "forest_reserves": forest_reserves,
     }
+    if baseline_description is not None:
+        uhi_block["baseline_description"] = baseline_description
+    if reference_lst_c is not None:
+        uhi_block["reference_lst_day_mean_c"] = round(reference_lst_c, 3)
+    base["uhi"] = uhi_block
     gcp = m.get("green_cover_percent")
     veg_block: dict[str, Any] = {
         "ndvi": round(ndvi_f, 4) if ndvi_f is not None else None,
@@ -699,12 +774,17 @@ def county_wards_metrics_table(
             "wards": [],
             "worst_wards_top_10": [],
         }
+    forest_reserves = _forest_reserves_intersecting_county(db, str(county_id))
     fgj = _forest_union_geojson(db, str(county_id))
     forest_baseline: Optional[float] = None
+    wards_baseline_description: Optional[str] = None
     if fgj:
         fb = compute_forest_baseline_lst_day(_norm_geojson(fgj), year)
         if fb.get("lst_day_forest_mean_c") is not None:
             forest_baseline = float(fb["lst_day_forest_mean_c"])
+            wards_baseline_description = _uhi_baseline_description(
+                int(year), forest_reserves, forest_baseline
+            )
 
     rows: list[dict[str, Any]] = []
     for w in get_uhi_wards(db):
@@ -773,12 +853,24 @@ def county_wards_metrics_table(
         "year": year,
         "county_id": str(county_id),
         "county_name": county["name"],
+        "uhi_reference": {
+            "baseline": (
+                UHI_BASELINE_FOREST_RESERVES_UNION
+                if forest_baseline is not None
+                else UHI_BASELINE_NONE
+            ),
+            "baseline_description": wards_baseline_description,
+            "reference_lst_day_mean_c": round(forest_baseline, 3)
+            if forest_baseline is not None
+            else None,
+            "forest_reserves": forest_reserves,
+        },
         "wards": rows,
         "worst_wards_top_10": worst,
     }
 
 
-def ward_uhi_report(db: Session, ward_id: str, year: int) -> dict[str, Any]:
+def _compute_ward_uhi_report(db: Session, ward_id: str, year: int) -> dict[str, Any]:
     initialize_ee()
     snap = ward_uhi_year_snapshot(db, ward_id, year)
 
@@ -841,7 +933,20 @@ def ward_uhi_report(db: Session, ward_id: str, year: int) -> dict[str, Any]:
     return out
 
 
-def county_uhi_report(db: Session, county_id: str, year: int) -> dict[str, Any]:
+def ward_uhi_report(
+    db: Session, ward_id: str, year: int, *, force_refresh: bool = False
+) -> dict[str, Any]:
+    key = _full_ward_report_cache_key(ward_id, year)
+    if not force_refresh:
+        hit = cache_get(key)
+        if hit is not None:
+            return hit
+    out = _compute_ward_uhi_report(db, ward_id, year)
+    cache_set(key, out, FULL_WARD_REPORT_TTL_SEC)
+    return out
+
+
+def _compute_county_uhi_report(db: Session, county_id: str, year: int) -> dict[str, Any]:
     initialize_ee()
     snap = county_uhi_year_snapshot(db, county_id, year)
 
@@ -912,4 +1017,17 @@ def county_uhi_report(db: Session, county_id: str, year: int) -> dict[str, Any]:
         out["urbanization"] = ur
     out["data_sources"] = DATA_SOURCES
     out["methodology"] = METHODOLOGY_SUMMARY
+    return out
+
+
+def county_uhi_report(
+    db: Session, county_id: str, year: int, *, force_refresh: bool = False
+) -> dict[str, Any]:
+    key = _full_county_report_cache_key(county_id, year)
+    if not force_refresh:
+        hit = cache_get(key)
+        if hit is not None:
+            return hit
+    out = _compute_county_uhi_report(db, county_id, year)
+    cache_set(key, out, FULL_COUNTY_REPORT_TTL_SEC)
     return out

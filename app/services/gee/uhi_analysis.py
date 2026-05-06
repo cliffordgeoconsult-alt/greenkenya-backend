@@ -35,7 +35,8 @@ METHODOLOGY_SUMMARY = (
     "LST: annual median MOD11A2 day (primary for UHI) and night, QC-masked. "
     "NDVI: annual median MOD13A2. Built: mean Dynamic World 'built' (not available before 2015). "
     "Green cover: mean sum of Dynamic World trees, grass, flooded_vegetation, crops, shrub_and_scrub probabilities (×100 as %); unavailable before 2015. "
-    "UHI intensity vs forest: mean day LST(entity) − mean day LST(forest reserves ∩ county), when forest exists. "
+    "UHI intensity vs reference: mean MOD11A2 day LST(entity) − mean day LST over ST_Union of forest reserve polygons "
+    "from our DB that intersect the county (reserve names returned in the report when available). "
     "Built-up % is mean built probability × 100. "
     "Livability: share of months where ERA5-Land zonal-mean 2 m T is in [18, 26] °C (climate-scale, ~11 km). "
     "Cooling slope: OLS of day LST ~ NDVI across wards in the county (correlation, not causal). "
@@ -379,6 +380,7 @@ def compute_uhi_monthly_metrics(geojson_str: str, year: int, month: int) -> dict
     return out
 
 
+@redis_cache("uhi_tile_lst_day_v1", ttl=7 * 86400)
 def get_uhi_lst_day_tile_url(geojson_str: str, year: int) -> dict:
     y = int(year)
     now_y = datetime.now().year
@@ -410,6 +412,7 @@ def get_uhi_lst_day_tile_url(geojson_str: str, year: int) -> dict:
     }
 
 
+@redis_cache("uhi_tile_lst_night_v1", ttl=7 * 86400)
 def get_uhi_lst_night_tile_url(geojson_str: str, year: int) -> dict:
     y = int(year)
     now_y = datetime.now().year
